@@ -12,18 +12,49 @@ proc toText(samples:seq[string]): seq[string] =
   for i, s in samples:
     result[i] = "sample:" & $s
 
+
+proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
+    if not (':' in a): return -1
+    var tmp = a.split(':')
+    var left = tmp[0]
+    var i = 0
+    while i < 3:
+      if left[i] in {'[', ']'}:
+        break
+      i += 1
+
+    var chrom = left[i+1..left.high]
+    if chrom != vchrom: return -1
+
+    var right = tmp[1]
+    i = 0
+    while right[i].isdigit:
+        i += 1
+    result = parseInt(right[0..<i])
+
+proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
+    return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
+
 proc main*() =
   let doc = format("""
 
-    Usage: bpbio plot-sv-vcf <vcf>
+    Usage: bpbio plot-sv-vcf [options] <vcf>
 
 Arguments:
 
-    <vcf>    a structural variant VCF
+   <vcf>    a structural variant VCF
+
+Options:
+
+  -t --threads <int>       number of BAM decompression threads [default: 2]
+  -s --size-cutoff <int>   size below which events are considered small [default: 300]
+
 
     """)
   let args = docopt(doc)
   var vcf:VCF
+  let threads = parseInt($args["--threads"])
+  let size = parseInt($args["--size-cutoff"])
 
   if not open(vcf, $args["<vcf>"], threads=2):
      quit "couldn't open vcf:" & $args["<vcf>"]
@@ -43,10 +74,15 @@ Arguments:
        "INV": Trace[int](`type`: PlotType.Bar, opacity: 0.8, name:"large inversion", ys: newSeq[int](n)),
        "BND": Trace[int](`type`: PlotType.Bar, opacity: 0.8, name:"large BNDs", ys: newSeq[int](n)),
     }.toTable
+    inters = {
+       "BND": Trace[int](`type`: PlotType.Bar, opacity: 0.8, name:"interchromosomal BNDs", ys: newSeq[int](n)),
+    }.toTable
 
   for v in smalls.mvalues:
     v.text = toText(vcf.samples)
   for v in larges.mvalues:
+    v.text = toText(vcf.samples)
+  for v in inters.mvalues:
     v.text = toText(vcf.samples)
 
 
@@ -63,8 +99,15 @@ Arguments:
        quit "no svtype for:" & $v
     var svlen = v.stop - v.start
     var nalts:seq[int8] = v.format.genotypes(gts).alts
-
-    if svlen > 1000:
+    if svtype == "BND":
+      var p = get_bnd_mate_pos(v)
+      if p == -1:
+        svlen = -1
+      else:
+        svlen = (v.start - p).abs
+    if svlen == -1:
+      tr = inters[svtype]
+    elif svlen > size:
       tr = larges[svtype]
     else:
       tr = smalls[svtype]
@@ -93,18 +136,21 @@ Arguments:
   var html = tmpl_hdr % ["title", $args["<vcf>"]]
 
   for i, pt in @["DEL", "DUP", "INV", "BND"]:
-    var layout = Layout(width: 1200, height: 400,
+    var layout = Layout(width: 1200, height: 360,
                     yaxis: Axis(title:pt),
                     xaxis: Axis(title: "sample", hideticklabels:true),
                     barmode: BarMode.Stack,
                     autosize: false)
-    var jsons = mapIt(@[smalls[pt], larges[pt]], it.json(as_pretty = false))
+    var jsons:seq[string]
+    if pt in inters:
+      jsons = mapIt(@[smalls[pt], larges[pt], inters[pt]], it.json(as_pretty = false))
+    else:
+      jsons = mapIt(@[smalls[pt], larges[pt]], it.json(as_pretty = false))
     var j = "[" & join(jsons, ",") & "]"
 
     var h = tmpl_body % ["i", $i, "data", j, "layout", $(%layout)]
     html &= h
 
-    #$Plot[int](layout: layout, traces: @[smalls[pt], larges[pt]]).show()
   html &= "</body></html>"
   var
      f: File
