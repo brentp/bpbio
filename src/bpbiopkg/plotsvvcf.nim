@@ -77,6 +77,12 @@ Options:
     inters = {
        "BND": Trace[int](`type`: PlotType.Bar, opacity: 0.8, name:"interchromosomal BNDs", ys: newSeq[int](n)),
     }.toTable
+    counts = {
+       "DEL": 0,
+       "DUP": 0,
+       "INV": 0,
+       "BND": 0,
+    }.toTable
 
   for v in smalls.mvalues:
     v.text = toText(vcf.samples)
@@ -99,6 +105,7 @@ Options:
        quit "no svtype for:" & $v
     var svlen = v.stop - v.start
     var nalts:seq[int8] = v.format.genotypes(gts).alts
+    counts[svtype].inc
     if svtype == "BND":
       var p = get_bnd_mate_pos(v)
       if p == -1:
@@ -129,7 +136,10 @@ Options:
   var tmpl_body = """
       <div id="plot$i"></div>
       <script>
-      Plotly.newPlot('plot$i', $data, $layout)
+      var pdata_$i = $data
+      var playout_$i = $layout
+      playout_$i.legend = {orientation: 'h', x:0, y:0}
+      var plot$i = Plotly.newPlot('plot$i', pdata_$i, playout_$i)
       </script>
     """
 
@@ -137,7 +147,7 @@ Options:
 
   for i, pt in @["DEL", "DUP", "INV", "BND"]:
     var layout = Layout(width: 1200, height: 360,
-                    yaxis: Axis(title:pt),
+                    yaxis: Axis(title:pt & " (" & $counts[pt] & ")"),
                     xaxis: Axis(title: "sample", hideticklabels:true),
                     barmode: BarMode.Stack,
                     autosize: false)
