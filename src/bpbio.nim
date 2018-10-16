@@ -3,6 +3,8 @@
 
 import bpbiopkg/plotsvvcf
 from bpbiopkg/info import version
+import bpbiopkg/fastcov
+export fastcov
 import strformat
 import tables
 import os
