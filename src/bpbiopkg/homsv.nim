@@ -44,7 +44,7 @@ type region_tid* = ref object
 proc `$`(r:region_tid): string =
     return &"{r.achrom}:{r.astart}-{r.astop} ... {r.bchrom}:{r.bstart}-{r.bstop}"
 
-proc chain_line_to_region(line: string, stripchr:bool, tids: seq[string]): region_tid {.inline.} =
+proc chain_line_to_region(line: string, tids: seq[string]): region_tid {.inline.} =
   # 585     2597464 chr1    249250621       10000   39170   chr12   133851895       -       133756271       133787376       4031    89.7
   var
     cse = line.strip().split('\t', 15)
@@ -90,7 +90,7 @@ proc flip*(a: region_tid): region_tid =
     result = region_tid(achrom: a.bchrom, astart:a.bstart, astop:a.bstop,
                       bchrom: a.achrom, bstart:a.astart, bstop:a.astop, percent_id:a.percent_id)
 
-proc bed_to_table(bed: string, stripchr:bool, tids:seq[string]): TableRef[uint16, seq[region_tid]] =
+proc bed_to_table(bed: string, tids:seq[string]): TableRef[uint16, seq[region_tid]] =
   result = newTable[uint16, seq[region_tid]]()
   var kstr = kstring_t(l:0, m: 0, s: nil)
   var hf = hts_open(cstring(bed), "r")
@@ -99,7 +99,7 @@ proc bed_to_table(bed: string, stripchr:bool, tids:seq[string]): TableRef[uint16
       continue
     if kstr.s[0] == '#':
       continue
-    var v = chain_line_to_region($kstr.s, stripchr, tids)
+    var v = chain_line_to_region($kstr.s, tids)
     if v == nil: continue
 
     discard result.hasKeyOrPut(v.achrom, new_seq[region_tid]())
@@ -135,14 +135,12 @@ Options:
 
   -t --threads <int>       number of BAM decompression threads [default: 2]
   -c --self-chain <path>   path to selfchain.bed.gz
-  -s --strip-chr           strip "chr" prefix from the self-chain file.
     """)
   let args = docopt(doc)
   var bam:BAM
   let
     threads = parseInt($args["--threads"])
     fasta = $args["<fasta>"]
-    strip = args["--strip-chr"] == true
   if $args["--self-chain"] == "nil":
       quit "--self-chain argument required"
 
@@ -158,7 +156,7 @@ Options:
   for t in bam.hdr.targets:
       tids.add(t.name)
 
-  var regions = bed_to_table($args["--self-chain"], strip, tids)
+  var regions = bed_to_table($args["--self-chain"], tids)
 
 
   for t in bam.hdr.targets:
