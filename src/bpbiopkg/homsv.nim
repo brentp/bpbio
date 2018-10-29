@@ -1,5 +1,6 @@
 import docopt
 import times
+import math
 import algorithm
 import strformat
 import hts
@@ -119,6 +120,129 @@ proc median_depth(depth:var seq[int16], start:uint32, stop:uint32, m:var MedianS
     m.clear
     for i in start..stop:
         m.add(depth[i.int].int)
+
+type merge_t = object
+    chrom: string
+    start: int
+    stop: int
+    depths: seq[float64]
+    zdepths: seq[float64]
+
+proc addLine(m:var merge_t, line: var string, i:int) =
+    var toks = line.split(seps={'\t'})
+    if m.chrom != "" and toks[0] != m.chrom:
+        quit "unmatched chromosomes in file:" & $i
+    m.chrom = toks[0]
+    m.start = parseInt(toks[1])
+    m.stop = parseInt(toks[2])
+
+    m.depths.add(parseFloat(toks[5]))
+    m.zdepths.add(parseFloat(toks[6]))
+
+proc normalize(m: var merge_t) =
+    ## normalize to the mean of samples.
+    ##
+    #var ms = MedianStats()
+    var s = 0.float64
+    for v in m.depths:
+        s += v
+        #ms.add((v*300).int)
+    s /= m.depths.len.float64
+    #var med = ms.median().float64 / 300'f64
+    for v in m.depths.mitems:
+        v /= s
+
+    s = 0.float64
+    for v in m.zdepths:
+        s += v
+    s /= m.zdepths.len.float64
+    for v in m.zdepths.mitems:
+        v /= s
+
+iterator merged(fhs: seq[File]): merge_t =
+
+  var line: string = ""
+
+  while fhs[0].readLine(line):
+    var result = merge_t()
+    result.addLine(line, 0)
+    for i in 1..fhs.high:
+      if not fhs[i].readLine(line):
+        quit "fewer lines in file" & $i
+      result.addLine(line, i)
+    #echo "before:", result.depths
+    normalize(result)
+    #echo "after :", result.depths
+    yield result
+
+proc fill_zscores(depths: seq[float64], zscores: var seq[float64]): float64 =
+  ## fills zscores with the zscores from depths and returns the maximum observed abs(zscore)
+  if zscores.len != depths.len:
+    zscores.setLen(depths.len)
+  var S = 0'f64
+  var m = 0'f64
+
+  for d in depths:
+      m += d
+  m /= zscores.len.float64
+  for d in depths:
+      S += (d - m) * (d - m)
+
+  var std = sqrt(S / zscores.len.float64)
+
+  var zmax = 0.0
+  for i, d in depths:
+      zscores[i] = (d - m) / std
+      if zscores[i].abs > zmax:
+          zmax = zscores[i].abs
+  return zmax
+
+
+proc merge*() =
+  let doc = format("""
+merge calls from bpbio homsv
+
+    Usage: bpbio homsv-merge [options] <txt>...
+
+Arguments:
+
+    <txt> paths to outputs from homsv
+
+Options:
+
+    -p --prefix <string>  prefix for output [default:homsv]
+
+  """)
+  let args = docopt(doc)
+
+  var homsvs = @(args["<txt>"])
+  var fhs = newSeq[File](homsvs.len)
+  var names = newSeq[string](homsvs.len)
+  for i, p in homsvs:
+    var f:File
+    if not open(f, p, fmRead):
+      quit "couldn't open " & p
+    fhs[i] = f
+    var base = p.split("/")
+    names[i] = base[base.high].rsplit(".", 1)[0]
+
+  var sdepths = newSeq[string](names.len)
+  var zscores = newSeq[float64](names.len)
+  for m in merged(fhs):
+    #var z = fill_zscores(m.zdepths, zscores)
+    #if z < 5: continue
+    var z = fill_zscores(m.depths, zscores)
+    if z < 6: continue
+    var nz = 0
+    for i, d in m.depths:
+      if d == 0: nz += 1
+      sdepths[i] = formatFloat(d, precision=3)
+    if nz > 20: continue
+
+    var sdepth = join(sdepths, "\t")
+
+    echo &"{m.chrom}\t{m.start}\t{m.stop}\t{sdepth}"
+
 
 proc main*() =
   let doc = format("""
