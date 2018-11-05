@@ -7,7 +7,7 @@ import hts
 import genoiser
 import strutils
 import tables
-import duphold
+import ./countstats
 
 type Strand* {.pure, size:1.} = enum
   Minus = 0
@@ -116,7 +116,7 @@ proc bed_to_table(bed: string, tids:seq[string]): TableRef[uint16, seq[region_ti
 
   hts.free(kstr.s)
 
-proc median_depth(depth:var seq[int16], start:uint32, stop:uint32, m:var MedianStats) {.inline.} =
+proc median_depth(depth:var seq[int16], start:uint32, stop:uint32, m:var CountStats[int]) {.inline.} =
     m.clear
     for i in start..stop:
         m.add(depth[i.int].int)
@@ -142,7 +142,6 @@ proc addLine(m:var merge_t, line: var string, i:int) =
 proc normalize(m: var merge_t) =
     ## normalize to the mean of samples.
     ##
-    #var ms = MedianStats()
     var s = 0.float64
     for v in m.depths:
         s += v
@@ -243,6 +242,26 @@ Options:
 
     echo &"{m.chrom}\t{m.start}\t{m.stop}\t{sdepth}"
 
+proc get_isize_distribution*(bam:Bam, n:int=4000000, skip=500000): CountStats[int] =
+    result = CountStats[int](counts:newSeq[int](512))
+    var k = 0
+    var mates = false
+    for aln in bam:
+        if aln.mate_pos != -1:
+            mates = true
+
+        k += 1
+        if k > 10000 and not mates:
+            stderr.write_line("no mates found. assuming single end reads")
+            return
+        if k < skip: continue
+
+        if aln.mapping_quality == 0: continue
+        #if not aln.flag.proper_pair: continue
+        if aln.start > aln.mate_pos: continue
+        result.add(max(0, aln.isize))
+        if result.n == n:
+            return
 
 proc main*() =
   let doc = format("""
@@ -316,7 +335,7 @@ Options:
 
     var d = depths.values
     var d0 = zdepths.values
-    var m = MedianStats()
+    var m = CountStats[int](counts:newSeq[int](512))
     d.median_depth(0.uint32, d.high.uint32, m)
     var chrom_med = m.median(skip_zeros=false)
 

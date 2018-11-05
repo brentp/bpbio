@@ -4,6 +4,7 @@
 import bpbiopkg/plotsvvcf
 from bpbiopkg/info import version
 import bpbiopkg/fastcov
+import bpbiopkg/homsv
 export fastcov
 import strformat
 import tables
@@ -14,7 +15,9 @@ type pair = object
     description: string
 
 var dispatcher = {
-  "plot-sv-vcf": pair(f:plotsvvcf.main, description:"make a plot of SV types across samples for a multi-sample SV VCF")
+  "plot-sv-vcf": pair(f:plotsvvcf.main, description:"make a plot of SV types across samples for a multi-sample SV VCF"),
+  "homsv": pair(f:homsv.main, description:"look for depth changes in self-chains or homologous regions"),
+  "homsv-merge": pair(f:homsv.merge, description:"merge output from homsv"),
   }.toTable
 
 when isMainModule:
