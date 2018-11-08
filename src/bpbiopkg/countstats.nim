@@ -5,15 +5,28 @@ type CountStats*[T: SomeOrdinal] = object
   ## we can even keep a moving window of medians as we can drop
   ## values by decrementing the counts.
   counts*: seq[T]
-  i_median: T
   n*: int
   n_below: int
-  i_ok: bool
-  min_value: T
+  current: T
+  min_value*: T
   max_size: int32
 
 proc initCountStats*[T](min_value:T=T(0), size:int=128, max_size:int32=262143): CountStats[T] =
   return CountStats[T](counts:newSeq[T](size), min_value:min_value.T, max_size:max_size)
+
+proc adjust[T](m: var CountStats[T]) {.inline.} =
+  var mid = int(0.5 + m.n / 2)
+  if mid <= m.n_below:
+    while m.current > 0.T:
+      m.current -= 1
+      m.n_below -= m.counts[m.current.int].int
+      if m.counts[m.current.int] != 0: break
+
+  elif mid > m.n_below + m.counts[m.current.int].int:
+    while m.current.int < m.counts.len:
+      m.n_below += m.counts[m.current.int].int
+      m.current += 1
+      if m.counts[m.current.int] != 0: break
 
 proc add*[T](m:var CountStats[T], d:T) {.inline.} =
   if d < m.min_value:
@@ -27,9 +40,11 @@ proc add*[T](m:var CountStats[T], d:T) {.inline.} =
     m.counts[min(m.counts.high.T, d - m.min_value)] += 1
   else:
     m.counts[m.counts.high.T] += 1
+  if d.int - m.min_value.int < m.current.int:
+    m.n_below += 1
 
   m.n += 1
-  m.i_ok = false
+  m.adjust()
 
 proc drop*[T](m:var CountStats[T], d:T) {.inline.} =
   if d < m.min_value:
@@ -38,26 +53,14 @@ proc drop*[T](m:var CountStats[T], d:T) {.inline.} =
     m.counts[d - m.min_value] -= 1
   else:
     m.counts[m.counts.high] -= 1
+  if d.int - m.min_value.int < m.current.int:
+    m.n_below -= 1
   m.n -= 1
-  m.i_ok = false
+  m.adjust()
 
-proc median*[T](m:var CountStats[T], skip_zeros:bool=false): T {.inline.} =
-  if m.i_ok:
-    return m.i_median
 
-  var cum:int64 = 0
-  var stop_n = (0.5 + m.n.float64 * 0.5).int64
-  if skip_zeros:
-    stop_n = (0.5 + float64(m.n - m.counts[0].int) * 0.5).int64
-
-  for i, cnt in m.counts:
-    if skip_zeros and i == 0: continue
-    cum += cnt.int64
-    if cum >= stop_n:
-      m.i_median = i.T + m.min_value
-      m.i_ok = true
-      break
-  return m.i_median
+proc median*[T](m:var CountStats[T]): T {.inline.} =
+  return m.current + m.min_value
 
 proc mean*[T](m:var CountStats[T]): float64 {.inline.} =
   for i, cnt in m.counts:
@@ -66,9 +69,10 @@ proc mean*[T](m:var CountStats[T]): float64 {.inline.} =
 
 proc clear*[T](m:var CountStats[T]) =
   zeroMem(m.counts[0].addr, sizeof(m.counts[0]) * m.counts.len)
-  m.i_ok = false
-  m.i_median = 0
+  m.current = T(0)
   m.n = 0
+  m.n_below = 0
+
 
 proc percentile*[T](m:CountStats[T], pct:float64): int {.inline.} =
   ## return the value at the requested percentile.
@@ -89,6 +93,12 @@ proc `$`*[T](m:var CountStats[T]): string =
   return &"CountStats(n:{m.n}, median:{m.median} vals: {m.counts[0..100]})"
 
 when isMainModule:
+    var c = CountStats[int](counts:newSeq[int](256))
+    c.add(1)
+    assert c.median == 1
+    c.add(3)
+    c.add(2)
+    assert c.median == 2
 
     import unittest
 
@@ -124,3 +134,28 @@ when isMainModule:
         c.drop(35)
         c.drop(34)
         check c.median == 33
+
+
+      test "example":
+        var c = initCountStats[uint16](min_value=uint16(328))
+        c.add(400'u16)
+        c.add(401'u16)
+        c.add(403'u16)
+        check c.median == 401'u16
+        for i in 0..100:
+          c.add(401'u16)
+          check c.median == 401'u16
+          check c.n == 4 + i
+
+        c.drop(400)
+        check c.median == 401
+        c.add(401)
+        check c.median == 401
+
+        for j in 0..100:
+          c.drop(401'u16)
+          check c.median == 401'u16
+
+        c.drop(401)
+        c.drop(401)
+        echo c.median
