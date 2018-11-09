@@ -337,7 +337,7 @@ Options:
     var d0 = zdepths.values
     var m = CountStats[int](counts:newSeq[int](512))
     d.median_depth(0.uint32, d.high.uint32, m)
-    var chrom_med = m.median(skip_zeros=false)
+    var chrom_med = m.median()
 
     var t0 = cpuTime()
     var n = 0
@@ -347,9 +347,9 @@ Options:
       if r.bstart - r.astop > 10000'u32: continue
       if r.bstop < r.astart: continue
       d.median_depth(r.astop, r.bstart, m)
-      var lm = m.median(skip_zeros=false)
+      var lm = m.median()
       d0.median_depth(r.astop, r.bstart, m)
-      var lm0 = m.median(skip_zeros=false)
+      var lm0 = m.median()
       echo &"{tids[r.achrom.int]}\t{r.astop}\t{r.bstart}\t{lm}\t{lm0}\t{lm.float64/chrom_med.float64:.3f}\t{lm0.float64/chrom_med.float64:.3f}"
       n += 1
     stderr.write_line &"{(cpuTime() - t0):.1f} seconds to test: {n} regions from: {t.name}. alignment parsing took {tbam:.1f} seconds"
