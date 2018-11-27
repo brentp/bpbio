@@ -120,7 +120,7 @@ Options:
         svlen = -1
       else:
         svlen = (v.start - p).abs
-    if svlen == -1:
+    if svlen == -1 and svtype == "BND":
       tr = inters[svtype]
     elif svlen > size:
       tr = larges[svtype]
