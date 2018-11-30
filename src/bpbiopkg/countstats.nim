@@ -14,7 +14,7 @@ type CountStats*[T: SomeOrdinal] = object
 proc initCountStats*[T](min_value:T=T(0), size:int=128, max_size:int32=262143): CountStats[T] =
   return CountStats[T](counts:newSeq[T](size), min_value:min_value.T, max_size:max_size)
 
-proc adjust[T](m: var CountStats[T]) {.inline.} =
+proc adjust*[T](m: var CountStats[T]) {.inline.} =
   var mid = int(0.5 + m.n / 2)
   if mid <= m.n_below:
     while m.current > 0.T:
