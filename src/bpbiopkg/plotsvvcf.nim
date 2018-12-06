@@ -67,7 +67,7 @@ Options:
     "DUP": "Duplications",
     "INV": "Inversions",
     "BND": "Break ends"
-  }.toOrderedTable
+  }.toTable
 
   var
     smalls = {
