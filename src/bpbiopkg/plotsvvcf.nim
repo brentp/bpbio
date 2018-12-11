@@ -62,6 +62,12 @@ Options:
      quit "couldn't open vcf:" & $args["<vcf>"]
 
   var n = vcf.n_samples
+  var titles = {
+    "DEL": "Deletions",
+    "DUP": "Duplications",
+    "INV": "Inversions",
+    "BND": "Break ends"
+  }.toTable
 
   var
     smalls = {
@@ -139,34 +145,60 @@ Options:
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>$title</title>
+  <title>bpbio - $title</title>
+   <link rel="stylesheet" href="https://stackpath.bootstrapcdn.com/bootstrap/4.1.3/css/bootstrap.min.css">
+   <style type="text/css">
+     .container{max-width: 100%}
+   </style>
    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
 </head>
 <body>
-<table>
+<nav class="navbar navbar-dark bg-dark">
+  <span class="navbar-brand mb-0 h1">bpbio plot-sv-vcf</span>
+</nav>
+<div class="container">
+  <dl class="row" style="margin-top:20px">
+    <dt class="col-sm-2">Input VCF</dt>
+    <dd class="col-sm-10"><samp>$title</samp></dd>
+    <dt class="col-sm-2">Size cutoff <code>[--size-cutoff]</code></dt>
+    <dd class="col-sm-10">$size</dd>
+    <dt class="col-sm-2">Samples</dt>
+    <dd class="col-sm-10">$samples</dd>
+    <dt class="col-sm-2">Deletions (DEL)</dt>
+    <dd class="col-sm-10">$dels</dd>
+    <dt class="col-sm-2">Duplications (DUP)</dt>
+    <dd class="col-sm-10">$dups</dd>
+    <dt class="col-sm-2">Inversions (INV)</dt>
+    <dd class="col-sm-10">$invs</dd>
+    <dt class="col-sm-2">Break ends (BND)</dt>
+    <dd class="col-sm-10">$bnds</dd>
+  </dl>
     """
   var tmpl_body = """
-<td>
-      <div id="plot$i"></div>
+
+      <div id="plot$i" class="col-6"></div>
       <script>
       var pdata_$i = $data;
       var playout_$i = $layout;
       playout_$i.legend = {orientation: 'h', x:0, y:0};
+      playout_$i.margin = {t: 10};
       if(Number($i) >= 10) {
         playout_$i.yaxis.log = true;
         playout_$i.yaxis.type = "log";
       }
       var plot$i = Plotly.newPlot('plot$i', pdata_$i, playout_$i)
       </script>
-</td>
+
     """
 
-  var html = tmpl_hdr % ["title", $args["<vcf>"]]
+  var html = tmpl_hdr % ["title", $args["<vcf>"], "size", $size, "samples", $n,
+    "dels", $type_counts["DEL"], "dups", $type_counts["DUP"],
+    "invs", $type_counts["INV"], "bnds", $type_counts["BND"]]
 
   for i, pt in @["DEL", "DUP", "INV", "BND"]:
-    var layout = Layout(width: 950, height: 350,
-                    yaxis: Axis(title:pt & " (" & $type_counts[pt] & ")"),
-                    xaxis: Axis(title: "sample", hideticklabels:true),
+    var layout = Layout(height: 350,
+                    yaxis: Axis(title:titles[pt] & " (" & $type_counts[pt] & ")"),
+                    xaxis: Axis(title: "Sample", hideticklabels:true),
                     barmode: BarMode.Stack,
                     autosize: false)
     var jsons:seq[string]
@@ -177,21 +209,21 @@ Options:
     var j = "[" & join(jsons, ",") & "]"
 
     var h = tmpl_body % ["i", $i, "data", j, "layout", $(%layout)]
-    html &= "<tr>" & h
+    html &= "<h1>" & titles[pt] & """</h1><div class="row">""" & h
 
     # AFS plot
-    layout = Layout(width: 950, height: 350,
+    layout = Layout(height: 350,
                     xaxis: Axis(title: "# of samples with " & pt & "s"),
-                    yaxis: Axis(title: "count of variants"),
+                    yaxis: Axis(title: "Count of variants"),
                     autosize: false)
     jsons = @[AFS_counts[pt].json(as_pretty=false)]
     j = "[" & join(jsons, ",") & "]"
 
     h = tmpl_body % ["i", $(i + 10), "data", j, "layout", $(%layout)]
-    html &= h & "</tr>"
+    html &= h & "</div>"
 
 
-  html &= "</table></body></html>"
+  html &= "</div></body></html>"
   var
      f: File
   if not open(f, "svvcf.html", fmWrite):
