@@ -8,3 +8,4 @@
 ## Libraries
 + countstats: get median and percentiles for integers in constant space and little time.
 + pedfile: ped (fam) file parsing and matching to VCF.
++ duko: ergonomic embedded javascript via [duktape](https://duktape.org/) and [duktape-nim](https://github.com/manguluka/duktape-nim)
