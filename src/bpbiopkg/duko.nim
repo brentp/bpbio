@@ -1,5 +1,17 @@
 import times
 import duktape/js
+export js
+
+type Duko* = object
+    ctx*: DTContext
+    name*: string
+    vptr: pointer
+
+type Dukexpr* = object
+    ## a compiled expression
+    ctx*: DTContext
+    vptr: pointer
+
 
 converter toBool*(d: duk_bool_t): bool {.inline.} =
     ## automatically converts the duk_bool_t to the appropriate true/false value in nim.
@@ -23,6 +35,7 @@ proc `[]=`*(ctx: DTContext, key: string, value: SomeFloat) {.inline.} =
     ctx.duk_push_number(value.duk_double_t)
     discard ctx.duk_put_global_string(key)
 
+
 proc `[]=`*(ctx: DTContext, key: string, values: seq[SomeNumber]) {.inline.} =
   ## set a global array of values
   var idx = ctx.duk_push_array()
@@ -35,12 +48,6 @@ proc `[]`*(ctx: DTContext, key:string): float {.inline.} =
     if ctx.duk_get_global_string(key) == 0:
         raise newException(KeyError, "couldn't find key:" & key)
     result = ctx.duk_get_number(-1).float
-
-type Dukexpr* = object
-    ## a compiled expression
-    ctx*: DTContext
-    vptr: pointer
-
 
 proc compile*(ctx: DTContext, expression: string): Dukexpr {.inline.} =
   ## compile an expression to be used later. This is about 10X faster than eval_string
@@ -65,11 +72,6 @@ proc check*(ctx: DTContext, expression: string): bool {.inline.} =
     result = ctx.duk_get_boolean(-1)
     ctx.pop()
 
-type Duko* = object
-    ctx*: DTContext
-    name*: string
-    vptr: pointer
-
 proc newObject*(ctx:DTContext, name: string): Duko =
   ## create a new object.
   result = Duko(ctx: ctx, name: name)
@@ -83,6 +85,13 @@ proc `[]=`*(o: Duko, key:string, value: SomeFloat) {.inline.} =
     o.ctx.duk_push_number(value.duk_double_t)
     doAssert o.ctx.duk_put_prop_string(idx, key)
     o.ctx.pop()
+
+proc alias*(o: Duko, copyname:string): Duko {.inline.} =
+  ## create an alias of a Duko so it can be reference as another name in the javascript.
+  var idx = o.ctx.duk_push_heapptr(o.vptr)
+  result = Duko(ctx: o.ctx, name:copyname)
+  result.vptr = o.vptr
+  doAssert result.ctx.duk_put_global_string(copyname)
 
 proc clear*(o: var Duko) {.inline.} =
   # TODO make this more efficient
@@ -167,7 +176,7 @@ when isMainModule:
       when defined(release):
         var tries = 1_000_000
       else:
-        var tries = 100_000
+        var tries = 50_000
 
       var success = 0
       for i in 0..tries:
@@ -208,6 +217,8 @@ when isMainModule:
           kid["sdf"] = 22.2
           kid["xxx"] = 33.3 + i.float
           kid["yy"] = 33.4 + i.float
+          var kid2 = kid.alias("kid2")
+          check kid2.vptr == kid.vptr
 
           if e.check():
             success.inc
@@ -216,3 +227,22 @@ when isMainModule:
       check success == 500
       echo (cpuTime() - t) / (tries / 1000000), " seconds per million evaluations"
       ctx.duk_destroy_heap();
+
+    test "that alias works":
+      var ctx = duk_create_heap_default()
+      var kid = ctx.newObject("kid")
+      for i in 0..100:
+          kid["some" & $i] = i
+
+      var kid2 = kid.alias("kid2")
+      check kid2["some22"] == 22.0
+      check kid["some22"] == 22.0
+      kid2["some22"] = 44.0
+      check kid["some22"] == 44.0
+      ctx.duk_eval_string("kid.some22")
+      check ctx.duk_get_number(-1) == 44.0
+      ctx.duk_eval_string("kid2.some22")
+      check ctx.duk_get_number(-1) == 44.0
+
+
+
