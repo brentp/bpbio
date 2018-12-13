@@ -35,12 +35,24 @@ proc `[]=`*(ctx: DTContext, key: string, value: SomeFloat) {.inline.} =
     ctx.duk_push_number(value.duk_double_t)
     discard ctx.duk_put_global_string(key)
 
+proc `[]=`*(ctx: DTContext, key: string, value: string) {.inline.} =
+    ## set a global value in the context
+    discard ctx.duk_push_string(value)
+    discard ctx.duk_put_global_string(key)
 
 proc `[]=`*(ctx: DTContext, key: string, values: seq[SomeNumber]) {.inline.} =
   ## set a global array of values
   var idx = ctx.duk_push_array()
   for i, v in values:
     ctx.duk_push_number(v.duk_double_t)
+    discard ctx.duk_put_prop_index(idx, i.duk_uarridx_t)
+  discard ctx.duk_put_global_string(key)
+
+proc `[]=`*(ctx: DTContext, key: string, values: seq[string]) {.inline.} =
+  ## set a global array of values
+  var idx = ctx.duk_push_array()
+  for i, v in values:
+    discard ctx.duk_push_string(v)
     discard ctx.duk_put_prop_index(idx, i.duk_uarridx_t)
   discard ctx.duk_put_global_string(key)
 
@@ -94,6 +106,14 @@ proc `[]=`*(o:Duko, key:string, value: SomeInteger) {.inline.} =
       quit "problem setting:" & key & " -> " & $value
     o.ctx.pop()
 
+proc `[]=`*(o:Duko, key:string, value: string) {.inline.} =
+    ## set the property at key to a value
+    var idx = o.ctx.duk_push_heapptr(o.vptr)
+    discard o.ctx.duk_push_string(value)
+    if not o.ctx.duk_put_prop_string(idx, key):
+      quit "problem setting:" & key & " -> " & $value
+    o.ctx.pop()
+
 proc alias*(o: Duko, copyname:string): Duko {.inline, discardable.} =
   ## create an alias of a Duko so it can be reference as another name in the javascript.
   doAssert o.ctx.duk_push_heapptr(o.vptr) >= 0
@@ -113,6 +133,15 @@ proc `[]=`*(o: Duko, key: string, values: seq[SomeNumber]) {.inline.} =
   var arr_idx = o.ctx.duk_push_array()
   for i, v in values:
     o.ctx.duk_push_number(v.duk_double_t)
+    discard o.ctx.duk_put_prop_index(arr_idx, i.duk_uarridx_t)
+  doAssert o.ctx.duk_put_prop_string(idx, key)
+  o.ctx.pop()
+
+proc `[]=`*(o: Duko, key: string, values: seq[string]) {.inline.} =
+  var idx = o.ctx.duk_push_heapptr(o.vptr)
+  var arr_idx = o.ctx.duk_push_array()
+  for i, v in values:
+    discard o.ctx.duk_push_string(v)
     discard o.ctx.duk_put_prop_index(arr_idx, i.duk_uarridx_t)
   doAssert o.ctx.duk_put_prop_string(idx, key)
   o.ctx.pop()
@@ -170,7 +199,29 @@ when isMainModule:
       ctx.duk_eval_string("obj.asdf")
       check ctx.duk_is_undefined(-1)
 
-      ctx.duk_destroy_heap();
+      ctx.duk_destroy_heap()
+
+    test "set string":
+      var ctx = duk_create_heap(nil, nil, nil, nil, my_fatal)
+      var obj = ctx.newObject("obj")
+      ctx["asdf"] = "hello"
+      ctx.duk_eval_string("asdf")
+      check ctx.duk_get_string(-1) == "hello"
+      ctx["asdf"] = @["hello", "good", "world"]
+      ctx.duk_eval_string("asdf.toString()")
+      check ctx.duk_get_string(-1) == "hello,good,world"
+
+      obj["name"] = "Mary"
+      ctx.duk_eval_string("obj.name")
+      check ctx.duk_get_string(-1) == "Mary"
+      obj["names"] = @["Mary", "Parker"]
+      ctx.duk_eval_string("obj.names.toString()")
+      check ctx.duk_get_string(-1) == "Mary,Parker"
+
+      obj["CSQ"] = "something|HIGH|TTN|tr|missense"
+      ctx.duk_eval_string("/HIGH/.test(obj.CSQ)")
+      check ctx.duk_get_boolean(-1)
+      ctx.duk_destroy_heap()
 
     test "speed":
       var ctx = duk_create_heap_default()
