@@ -31,17 +31,13 @@ proc fill[T: int8 | int32 | float32 | string](sample:ISample, name:string, value
     sample.duk[name] = values[(nper*sample.i)..<(nper*(sample.i+1))]
 
 proc fill[T: int8 | int32 | float32 | string](trio:Trio, name:string, values:var seq[T], nper:int) {.inline.} =
-  var filled = newSeq[bool](int(values.len / nper))
   for s in trio:
-    if filled[s.i]:
-        continue
-    filled[s.i] = true
     s.fill(name, values, nper)
 
 proc newEvaluator*(kids: seq[Sample], expression: Table[string, string]): TrioEvaluator =
   ## make a new evaluation context for the given string
   var my_fatal: duk_fatal_function = (proc (udata: pointer, msg:cstring) {.stdcall.} =
-    stderr.write_line "varianteval fatal error:"
+    stderr.write_line "variexpr fatal error:"
     quit $msg
   )
 
@@ -142,7 +138,7 @@ proc main*(dropfirst:bool=false) =
   let doc = """
 variexpr -- variant expression for great good
 
-Usage: variexpr [options] <expressions>...
+Usage: variexpr [--pass-only --out-vcf <path> --vcf <path> --ped <path> --expression=<expression>...]
 
 Arguments:
 
@@ -206,7 +202,7 @@ Options
   ovcf.copy_header(ivcf.header)
 
   var tbl = initTable[string, string]()
-  for e in @(args["<expressions>"]):
+  for e in @(args["--expression"]):
     var t = e.split(seps={':'}, maxsplit=1)
     if t.len != 2:
       quit "must specify name:expression pairs"

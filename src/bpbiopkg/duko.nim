@@ -62,7 +62,7 @@ proc `[]`*(ctx: DTContext, key:string): float {.inline.} =
     result = ctx.duk_get_number(-1).float
 
 proc compile*(ctx: DTContext, expression: string): Dukexpr {.inline.} =
-  ## compile an expression to be used later. This is about 10X faster than eval_string
+  ## compile an expression to be used later. This is about 10X faster than eval_string.
   result = Dukexpr(ctx:ctx, expr: expression)
   if ctx.duk_pcompile_string(0, expression) != 0:
     var err = ctx.duk_safe_to_string(-1)
@@ -74,13 +74,18 @@ proc check*(d:Dukexpr): bool {.inline.} =
   discard d.ctx.duk_push_heapptr(d.vptr)
   if d.ctx.duk_pcall(0) != 0:
     var err = d.ctx.duk_safe_to_string(-1)
-    raise newException(ValueError, $err)
+    stderr.write_line "[duko] error evaluating: " & d.expr
+    raise newException(ValueError, "error from duktape: " & $err & "\n")
   result = d.ctx.duk_get_boolean(-1)
   d.ctx.pop()
 
 proc check*(ctx: DTContext, expression: string): bool {.inline.} =
     ## evaluate the expression in the current context
-    ctx.duk_eval_string(expression)
+    if ctx.duk_peval_string(expression):
+      var err = ctx.duk_safe_to_string(-1)
+      stderr.write_line "[duko] error evaluating: " & expression
+      raise newException(ValueError, "error from duktape: " & $err & "\n")
+
     result = ctx.duk_get_boolean(-1)
     ctx.pop()
 

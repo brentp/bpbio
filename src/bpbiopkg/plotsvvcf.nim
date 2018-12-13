@@ -37,10 +37,10 @@ proc get_bnd_mate_pos*(a:string, vchrom:string): int {.inline.} =
 proc get_bnd_mate_pos(variant:Variant): int {.inline.} =
     return get_bnd_mate_pos(variant.ALT[0], $variant.CHROM)
 
-proc main*() =
+proc main*(dropfirst:bool=false) =
   let doc = format("""
 
-    Usage: bpbio plot-sv-vcf [options] <vcf>
+    Usage: plot-sv-vcf [options] <vcf>
 
 Arguments:
 
@@ -53,7 +53,12 @@ Options:
 
 
     """)
-  let args = docopt(doc)
+  var args: Table[string, docopt.Value]
+  if dropfirst:
+    var argv = commandLineParams()
+    args = docopt(doc, argv=argv[1..argv.high])
+  else:
+    args = docopt(doc)
   var vcf:VCF
   let threads = parseInt($args["--threads"])
   let size = parseInt($args["--size-cutoff"])

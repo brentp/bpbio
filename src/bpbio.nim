@@ -3,21 +3,23 @@
 
 import bpbiopkg/plotsvvcf
 from bpbiopkg/info import version
-import bpbiopkg/fastcov
-import bpbiopkg/homsv
-export fastcov
+#import bpbiopkg/fastcov
+#import bpbiopkg/homsv
+import bpbiopkg/variexpr
+#export fastcov
 import strformat
 import tables
 import os
 
 type pair = object
-    f: proc()
+    f: proc(dropfirst:bool)
     description: string
 
 var dispatcher = {
   "plot-sv-vcf": pair(f:plotsvvcf.main, description:"make a plot of SV types across samples for a multi-sample SV VCF"),
-  "homsv": pair(f:homsv.main, description:"look for depth changes in self-chains or homologous regions"),
-  "homsv-merge": pair(f:homsv.merge, description:"merge output from homsv"),
+  "variexpr": pair(f:variexpr.main, description:"simple expression to filter or annotate VCFs"),
+  #"homsv": pair(f:homsv.main, description:"look for depth changes in self-chains or homologous regions"),
+  #"homsv-merge": pair(f:homsv.merge, description:"merge output from homsv"),
   }.toTable
 
 when isMainModule:
@@ -31,4 +33,4 @@ when isMainModule:
         echo &"unknown program '{args[0]}'"
     quit 1
 
-  dispatcher[args[0]].f()
+  dispatcher[args[0]].f(true)
