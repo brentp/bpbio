@@ -78,6 +78,7 @@ proc set_format_field(ctx: TrioEvaluator, f:FormatField, fmt:FORMAT, ints: var s
     quit "Unknown field type:" & $f.vtype & " in field:" & f.name
 
 proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], floats: var seq[float32]) =
+  var istr: string = ""
   var info = variant.info
   for field in info.fields:
     if field.vtype == BCF_TYPE.FLOAT:
@@ -88,7 +89,12 @@ proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], flo
       else:
           ctx.INFO[field.name] = floats
     elif field.vtype == BCF_TYPE.CHAR:
-        discard
+      when true:
+        var ret = info.get(field.name, istr)
+        if ret != Status.OK:
+          quit "couldn't get field:" & field.name & " status:" & $ret
+        # NOTE: all set as a single string for now.
+        ctx.INFO[field.name] = $istr
     elif field.vtype in {BCF_TYPE.INT32, BCF_TYPE.INT16, BCF_TYPE.INT8}:
       if info.get(field.name, ints) != Status.OK:
         quit "couldn't get field:" & field.name
@@ -100,8 +106,8 @@ proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], flo
 
 proc evaluate*(ctx:var TrioEvaluator, variant:Variant): TableRef[string, seq[string]] =
   ctx.clear()
-  var ints: seq[int32]
-  var floats: seq[float32]
+  var ints = newSeq[int32](variant.n_samples)
+  var floats = newSeq[float32](variant.n_samples)
 
   ## the most expensive part is pulling out the format fields so we pull all fields
   ## and set values for all samples in the trio list.
@@ -109,6 +115,7 @@ proc evaluate*(ctx:var TrioEvaluator, variant:Variant): TableRef[string, seq[str
   result = newTable[string, seq[string]]()
   var samples = variant.vcf.samples
 
+  ctx.set_infos(variant, ints, floats)
 
   # file the format fields
   var fmt = variant.format
@@ -116,7 +123,6 @@ proc evaluate*(ctx:var TrioEvaluator, variant:Variant): TableRef[string, seq[str
     if f.name == "GT": continue
     ctx.set_format_field(f, fmt, ints, floats)
 
-  ctx.set_infos(variant, ints, floats)
   var alts = variant.format.genotypes(ints).alts
   for trio in ctx.trios:
       trio.fill("alts", alts, 1)
@@ -144,19 +150,25 @@ Usage: variexpr [options] <expressions>...
 Arguments:
 
     <expressions>...  as many name:expression pairs as required. an example would be:
-    "denovo:kid.alts == 1 && mom.alts == 0 && dad.alts == 0 && (mom.AD[1] + dad.AD[1]) < 2 && kid.GQ > 10 && mom.GQ > 10 && dad.GQ > 10 && kid.DP > 10 && mom.DP > 10 && dad.DP > 10"
+    "denovo:kid.alts == 1 && mom.alts == 0 && dad.alts == 0 && (mom.AD[1] + dad.AD[1]) < 2 && kid.GQ > 10 \
+                          && mom.GQ > 10 && dad.GQ > 10 && kid.DP > 10 && mom.DP > 10 && dad.DP > 10"
     this will be evaluated for every trio with kid, mom, dad set appropriately.
+    other examples:
+
+    "high_impact:/HIGH/.test(INFO.CSQ)"
+
+    "rare_transmitted:(kid.alts > 0) && (dad.alts > 0 || mom.alts > 0) && kid.DP > 10 && mom.DP > 0 && INFO.AF < 0.01"
 
 Options
 
   -v --vcf <path>       VCF/BCF
   -p --ped <path>       pedigree file with trio relations
   -o --out-vcf <path>   VCF/BCF
+  -p --pass-only        only output variants that pass at least one of the filters [default: false]
 
   """
 
   let args = docopt(doc)
-  echo args
   if $args["--vcf"] == "nil":
     stderr.write_line "must specify the --vcf"
     quit doc
@@ -172,6 +184,8 @@ Options
 
   if not open(ivcf, $args["--vcf"], threads=3):
     quit "couldn't open:" & $args["--vcf"]
+
+  var pass_only = bool(args["--pass-only"])
 
   var samples = parse_ped($args["--ped"])
   samples = samples.match(ivcf)
@@ -211,6 +225,7 @@ Options
       stderr.write_line $i, " ", $variant.CHROM, ":", $variant.start, " evaluated ", $i, " variants in ", $(cpuTime() - t), " seconds"
       t = cpuTime()
     var dns = ev.evaluate(variant)
+    if pass_only and dns.len == 0: continue
     for name, samples in dns:
       var ssamples = join(samples, ",")
       if variant.info.set(name, ssamples) != Status.OK:

@@ -50,12 +50,12 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
     if s.paternal_id in look:
       s.dad = look[s.paternal_id]
       s.dad.kids.add(s)
-    elif verbose and not (s.paternal_id in @[".", "-9", ""]):
+    elif verbose and not (s.paternal_id in @[".", "-9", "", "0"]):
       stderr.write_line &"[pedfile] paternal_id: \"{s.paternal_id}\" referenced for sample {s.id} not found"
     if s.maternal_id in look:
       s.mom = look[s.maternal_id]
       s.mom.kids.add(s)
-    elif verbose and not (s.maternal_id in @[".", "-9", ""]):
+    elif verbose and not (s.maternal_id in @[".", "-9", "", "0"]):
       stderr.write_line &"[pedfile] maternal_id: \"{s.maternal_id}\" referenced for sample {s.id} not found"
 
 proc match*(samples: seq[Sample], vcf:var VCF, verbose:bool=true): seq[Sample] =
