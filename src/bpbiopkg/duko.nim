@@ -28,17 +28,17 @@ template pop*(ctx:DTContext) =
 proc `[]=`*(ctx: DTContext, key:string, value: SomeOrdinal) {.inline.} =
     ## set a global value in the context
     ctx.duk_push_int(value.duk_int_t)
-    discard ctx.duk_put_global_string(key)
+    discard ctx.duk_put_global_lstring(key, key.len.duk_size_t)
 
 proc `[]=`*(ctx: DTContext, key: string, value: SomeFloat) {.inline.} =
     ## set a global value in the context
     ctx.duk_push_number(value.duk_double_t)
-    discard ctx.duk_put_global_string(key)
+    discard ctx.duk_put_global_lstring(key, key.len.duk_size_t)
 
 proc `[]=`*(ctx: DTContext, key: string, value: string) {.inline.} =
     ## set a global value in the context
-    discard ctx.duk_push_string(value)
-    discard ctx.duk_put_global_string(key)
+    discard ctx.duk_push_lstring(value, value.len.duk_size_t)
+    discard ctx.duk_put_global_lstring(key, key.len.duk_size_t)
 
 proc `[]=`*(ctx: DTContext, key: string, values: seq[SomeNumber]) {.inline.} =
   ## set a global array of values
@@ -46,18 +46,18 @@ proc `[]=`*(ctx: DTContext, key: string, values: seq[SomeNumber]) {.inline.} =
   for i, v in values:
     ctx.duk_push_number(v.duk_double_t)
     discard ctx.duk_put_prop_index(idx, i.duk_uarridx_t)
-  discard ctx.duk_put_global_string(key)
+  discard ctx.duk_put_global_lstring(key, key.len.duk_size_t)
 
 proc `[]=`*(ctx: DTContext, key: string, values: seq[string]) {.inline.} =
   ## set a global array of values
   var idx = ctx.duk_push_array()
   for i, v in values:
-    discard ctx.duk_push_string(v)
+    discard ctx.duk_push_lstring(v, v.len.duk_size_t)
     discard ctx.duk_put_prop_index(idx, i.duk_uarridx_t)
-  discard ctx.duk_put_global_string(key)
+  discard ctx.duk_put_global_lstring(key, key.len.duk_size_t)
 
 proc `[]`*(ctx: DTContext, key:string): float {.inline.} =
-    if ctx.duk_get_global_string(key) == 0:
+    if ctx.duk_get_global_lstring(key, key.len.duk_size_t) == 0:
         raise newException(KeyError, "couldn't find key:" & key)
     result = ctx.duk_get_number(-1).float
 
@@ -89,28 +89,28 @@ proc newObject*(ctx:DTContext, name: string): Duko =
   result = Duko(ctx: ctx, name: name)
   discard ctx.duk_push_object()
   result.vptr = ctx.duk_get_heapptr(-1)
-  doAssert result.ctx.duk_put_global_string(name)
+  doAssert result.ctx.duk_put_global_lstring(name, name.len.duk_size_t)
 
 proc `[]=`*(o:Duko, key:string, value: SomeFloat) {.inline.} =
     ## set the property at key to a value
     var idx = o.ctx.duk_push_heapptr(o.vptr)
     o.ctx.duk_push_number(value.duk_double_t)
-    doAssert o.ctx.duk_put_prop_string(idx, key)
+    doAssert o.ctx.duk_put_prop_lstring(idx, key, key.len.duk_size_t)
     o.ctx.pop()
 
 proc `[]=`*(o:Duko, key:string, value: SomeInteger) {.inline.} =
     ## set the property at key to a value
     var idx = o.ctx.duk_push_heapptr(o.vptr)
     o.ctx.duk_push_int(value.duk_int_t)
-    if not o.ctx.duk_put_prop_string(idx, key):
+    if not o.ctx.duk_put_prop_lstring(idx, key, key.len.duk_size_t):
       quit "problem setting:" & key & " -> " & $value
     o.ctx.pop()
 
 proc `[]=`*(o:Duko, key:string, value: string) {.inline.} =
     ## set the property at key to a value
     var idx = o.ctx.duk_push_heapptr(o.vptr)
-    discard o.ctx.duk_push_string(value)
-    if not o.ctx.duk_put_prop_string(idx, key):
+    discard o.ctx.duk_push_lstring(value, value.len.duk_size_t)
+    if not o.ctx.duk_put_prop_lstring(idx, key, key.len.duk_size_t):
       quit "problem setting:" & key & " -> " & $value
     o.ctx.pop()
 
@@ -119,14 +119,14 @@ proc alias*(o: Duko, copyname:string): Duko {.inline, discardable.} =
   doAssert o.ctx.duk_push_heapptr(o.vptr) >= 0
   result = Duko(ctx: o.ctx, name:copyname)
   result.vptr = o.vptr
-  doAssert result.ctx.duk_put_global_string(copyname)
+  doAssert result.ctx.duk_put_global_literal_raw(copyname, copyname.len.duk_size_t)
 
 proc clear*(o: var Duko) {.inline.} =
   # TODO make this more efficient
   #o.ctx.duk_eval_string(o.name & "= null")
   discard o.ctx.duk_push_object()
   o.vptr = o.ctx.duk_get_heapptr(-1)
-  doAssert o.ctx.duk_put_global_string(o.name)
+  doAssert o.ctx.duk_put_global_literal_raw(o.name, o.name.len.duk_size_t)
 
 proc `[]=`*(o: Duko, key: string, values: seq[SomeNumber]) {.inline.} =
   var idx = o.ctx.duk_push_heapptr(o.vptr)
@@ -134,21 +134,21 @@ proc `[]=`*(o: Duko, key: string, values: seq[SomeNumber]) {.inline.} =
   for i, v in values:
     o.ctx.duk_push_number(v.duk_double_t)
     discard o.ctx.duk_put_prop_index(arr_idx, i.duk_uarridx_t)
-  doAssert o.ctx.duk_put_prop_string(idx, key)
+  doAssert o.ctx.duk_put_prop_lstring(idx, key, key.len.duk_size_t)
   o.ctx.pop()
 
 proc `[]=`*(o: Duko, key: string, values: seq[string]) {.inline.} =
   var idx = o.ctx.duk_push_heapptr(o.vptr)
   var arr_idx = o.ctx.duk_push_array()
   for i, v in values:
-    discard o.ctx.duk_push_string(v)
+    discard o.ctx.duk_push_lstring(v, v.len.duk_size_t)
     discard o.ctx.duk_put_prop_index(arr_idx, i.duk_uarridx_t)
-  doAssert o.ctx.duk_put_prop_string(idx, key)
+  doAssert o.ctx.duk_put_prop_lstring(idx, key, key.len.duk_size_t)
   o.ctx.pop()
 
 proc `[]`*(o: Duko, key:string): float {.inline.} =
     var idx = o.ctx.duk_push_heapptr(o.vptr)
-    discard o.ctx.duk_push_string(key)
+    discard o.ctx.duk_push_lstring(key, key.len.duk_size_t)
     doAssert o.ctx.duk_get_prop(idx)
     result = o.ctx.duk_get_number(-1).float
     o.ctx.duk_pop_n(2)

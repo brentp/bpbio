@@ -4,11 +4,15 @@ import ./duko
 import strutils
 import tables
 import hts/vcf
+import os
+import times
+import strformat
+import docopt
 
 
 type ISample = object
-    i: int
-    duk: Duko
+  i: int
+  duk: Duko
 
 type Trio = array[3, ISample] ## kid, dad, mom
 
@@ -20,21 +24,19 @@ type TrioEvaluator* = ref object
   names: seq[string]
 
 proc fill[T: int8 | int32 | float32 | string](sample:ISample, name:string, values:var seq[T], nper:int) {.inline.} =
-  if nper > 10: return
+  if nper > 2: return
   if nper == 1:
     sample.duk[name] = values[sample.i]
   else:
     sample.duk[name] = values[(nper*sample.i)..<(nper*(sample.i+1))]
 
 proc fill[T: int8 | int32 | float32 | string](trio:Trio, name:string, values:var seq[T], nper:int) {.inline.} =
+  var filled = newSeq[bool](int(values.len / nper))
   for s in trio:
+    if filled[s.i]:
+        continue
+    filled[s.i] = true
     s.fill(name, values, nper)
-#[
-
-var ctx = newEvaluator(kids, {"denovo":"mom.DP > 20 && dad.DP > 20 && kid.DP < 10"}.toTable)
-var sample_list = ctx.evaluate(variant)
-
-]#
 
 proc newEvaluator*(kids: seq[Sample], expression: Table[string, string]): TrioEvaluator =
   ## make a new evaluation context for the given string
@@ -62,6 +64,7 @@ proc clear*(ctx:var TrioEvaluator) {.inline.} =
   ctx.INFO.clear()
 
 proc set_format_field(ctx: TrioEvaluator, f:FormatField, fmt:FORMAT, ints: var seq[int32], floats: var seq[float32]) =
+
   if f.vtype == BCF_TYPE.FLOAT:
     if fmt.get(f.name, floats) != Status.OK:
       quit "couldn't get format field:" & f.name
@@ -104,16 +107,15 @@ proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], flo
           ctx.INFO[field.name] = ints
 
 
-proc evaluate*(ctx:var TrioEvaluator, variant:Variant): TableRef[string, seq[string]] =
+proc evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): TableRef[string, seq[string]] =
   ctx.clear()
-  var ints = newSeq[int32](variant.n_samples)
-  var floats = newSeq[float32](variant.n_samples)
+  var ints = newSeq[int32](3 * variant.n_samples)
+  var floats = newSeq[float32](3 * variant.n_samples)
 
   ## the most expensive part is pulling out the format fields so we pull all fields
   ## and set values for all samples in the trio list.
   ## once all that is done, we evaluate the expressions.
   result = newTable[string, seq[string]]()
-  var samples = variant.vcf.samples
 
   ctx.set_infos(variant, ints, floats)
 
@@ -136,12 +138,7 @@ proc evaluate*(ctx:var TrioEvaluator, variant:Variant): TableRef[string, seq[str
         result.mgetOrPut(ctx.names[i], newSeq[string]()).add(samples[trio[0].i])
 
 
-when isMainModule:
-  import os
-  import times
-  import strformat
-  import docopt
-
+proc main*(dropfirst:bool=false) =
   let doc = """
 variexpr -- variant expression for great good
 
@@ -164,11 +161,17 @@ Options
   -v --vcf <path>       VCF/BCF
   -p --ped <path>       pedigree file with trio relations
   -o --out-vcf <path>   VCF/BCF
-  -p --pass-only        only output variants that pass at least one of the filters [default: false]
+  --pass-only           only output variants that pass at least one of the filters [default: false]
 
   """
 
-  let args = docopt(doc)
+  var args: Table[string, docopt.Value]
+  if dropfirst:
+    var argv = commandLineParams()
+    args = docopt(doc, argv=argv[1..argv.high])
+  else:
+    args = docopt(doc)
+
   if $args["--vcf"] == "nil":
     stderr.write_line "must specify the --vcf"
     quit doc
@@ -215,16 +218,19 @@ Options
 
   var ev = newEvaluator(kids, tbl)
   var t = cpuTime()
-  var n = 5000
+  var n = 10000
+  var vcf_samples: seq[string] = ivcf.samples
 
   var i = 0
   for variant in ivcf:
     variant.vcf = ovcf
     i += 1
     if i mod n == 0:
-      stderr.write_line $i, " ", $variant.CHROM, ":", $variant.start, " evaluated ", $i, " variants in ", $(cpuTime() - t), " seconds"
+      var secs = cpuTime() - t
+      var persec = n.float64 / secs.float64
+      stderr.write_line &"[variexpr] {i} {variant.CHROM}:{variant.start} evaluated {n} variants in {secs:.1f} seconds ({persec:.1f}/second)"
       t = cpuTime()
-    var dns = ev.evaluate(variant)
+    var dns = ev.evaluate(variant, vcf_samples)
     if pass_only and dns.len == 0: continue
     for name, samples in dns:
       var ssamples = join(samples, ",")
@@ -235,3 +241,6 @@ Options
 
   ovcf.close()
   ivcf.close()
+
+when isMainModule:
+  main()
