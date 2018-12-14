@@ -125,7 +125,7 @@ proc set_calculated_variant_fields(ctx:TrioEvaluator, alts: var seq[int8]) =
   # homref, het, homalt, unknown (-1)
   var counts = [0, 0, 0, 0]
   for a in alts:
-    if unlikely(a == -1):
+    if unlikely(a < 0 or a > 2):
       counts[3].inc
     else:
       counts[a].inc
@@ -213,6 +213,12 @@ proc getExpressionTable(ovcf:VCF, expressions:seq[string], invcf:string): TableR
     if ovcf.header.add_info(t[0], ".", "String", &"added by variexpr with expression: '{t[1]}' from {invcf}") != Status.OK:
       quit "error adding field to header"
 
+iterator variants(vcf:VCF, region:string): Variant =
+  if region == "" or region == "nil":
+    for v in vcf: yield v
+  else:
+    for v in vcf.query(region): yield v
+
 
 proc main*(dropfirst:bool=false) =
   let doc = """
@@ -235,7 +241,8 @@ Arguments:
 Options:
 
   -v --vcf <path>       VCF/BCF
-  -j --js <path>           path to javascript functions to expose to user
+  --region <string>     optional region to limit evaluation. e.g. chr1 or 1:222-333
+  -j --js <path>        path to javascript functions to expose to user
   -p --ped <path>       pedigree file with trio relations
   -o --out-vcf <path>   VCF/BCF
   --pass-only           only output variants that pass at least one of the filters [default: false]
@@ -262,7 +269,7 @@ Options:
     ivcf:VCF
     ovcf:VCF
 
-  if not open(ivcf, $args["--vcf"], threads=1):
+  if not open(ivcf, $args["--vcf"], threads=2):
     quit "couldn't open:" & $args["--vcf"]
 
   var pass_only = bool(args["--pass-only"])
@@ -298,7 +305,7 @@ Options:
   var vcf_samples: seq[string] = ivcf.samples
 
   var i = 0
-  for variant in ivcf:
+  for variant in ivcf.variants($args["--region"]):
     variant.vcf = ovcf
     i += 1
     if i mod n == 0:
@@ -306,6 +313,10 @@ Options:
       var persec = n.float64 / secs.float64
       stderr.write_line &"[variexpr] {i} {variant.CHROM}:{variant.start} evaluated {n} variants in {secs:.1f} seconds ({persec:.1f}/second)"
       t = cpuTime()
+      if i >= 100000:
+        n = 100000
+      if i >= 500000:
+        n = 500000
     for ns in ev.evaluate(variant, vcf_samples):
       if pass_only and ns.sampleList.len == 0: continue
       var ssamples = join(ns.sampleList, ",")
