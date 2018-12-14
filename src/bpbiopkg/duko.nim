@@ -64,7 +64,7 @@ proc `[]`*(ctx: DTContext, key:string): float {.inline.} =
 proc compile*(ctx: DTContext, expression: string): Dukexpr {.inline.} =
   ## compile an expression to be used later. This is about 10X faster than eval_string.
   result = Dukexpr(ctx:ctx, expr: expression)
-  if ctx.duk_pcompile_string(0, expression) != 0:
+  if ctx.duk_pcompile_string(32, expression) != 0:
     var err = ctx.duk_safe_to_string(-1)
     raise newException(ValueError, $err)
   result.vptr = ctx.duk_get_heapptr(-1)

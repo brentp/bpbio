@@ -26,18 +26,17 @@ type TrioEvaluator* = ref object
   expressions: seq[Dukexpr]
   names: seq[string]
 
-proc fill[T: int8 | int32 | float32 | string](sample:ISample, name:string, values:var seq[T], nper:int) {.inline.} =
-  if nper > 2: return
+template fill[T: int8 | int32 | float32 | string](sample:ISample, name:string, values:var seq[T], nper:int) =
   if nper == 1:
     sample.duk[name] = values[sample.i]
-  else:
+  elif nper <= 2:
     sample.duk[name] = values[(nper*sample.i)..<(nper*(sample.i+1))]
 
-proc fill[T: int8 | int32 | float32 | string](trio:Trio, name:string, values:var seq[T], nper:int) {.inline.} =
+template fill[T: int8 | int32 | float32 | string](trio:Trio, name:string, values:var seq[T], nper:int) =
   for s in trio:
     s.fill(name, values, nper)
 
-proc newEvaluator*(kids: seq[Sample], expression: Table[string, string]): TrioEvaluator =
+proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string]): TrioEvaluator =
   ## make a new evaluation context for the given string
   var my_fatal: duk_fatal_function = (proc (udata: pointer, msg:cstring) {.stdcall.} =
     stderr.write_line "variexpr fatal error:"
@@ -45,7 +44,7 @@ proc newEvaluator*(kids: seq[Sample], expression: Table[string, string]): TrioEv
   )
 
   result = TrioEvaluator(ctx:duk_create_heap(nil, nil, nil, nil, my_fatal))
-  result.ctx.duk_require_stack_top(50000)
+  result.ctx.duk_require_stack_top(500000)
   for k, v in expression:
     result.expressions.add(result.ctx.compile(v))
     result.names.add(k)
@@ -70,6 +69,8 @@ proc set_format_field(ctx: TrioEvaluator, f:FormatField, fmt:FORMAT, ints: var s
     if fmt.get(f.name, floats) != Status.OK:
       quit "couldn't get format field:" & f.name
     for trio in ctx.trios:
+      if f.name == "GQ":
+        echo floats
       trio.fill(f.name, floats, f.n_per_sample)
   elif f.vtype == BCF_TYPE.CHAR:
     discard
@@ -143,12 +144,11 @@ proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], flo
       else:
           ctx.INFO[field.name] = floats
     elif field.vtype == BCF_TYPE.CHAR:
-      when true:
-        var ret = info.get(field.name, istr)
-        if ret != Status.OK:
-          quit "couldn't get field:" & field.name & " status:" & $ret
+      var ret = info.get(field.name, istr)
+      if ret != Status.OK:
+        quit "couldn't get field:" & field.name & " status:" & $ret
         # NOTE: all set as a single string for now.
-        ctx.INFO[field.name] = $istr
+      ctx.INFO[field.name] = $istr
     elif field.vtype in {BCF_TYPE.INT32, BCF_TYPE.INT16, BCF_TYPE.INT8}:
       if info.get(field.name, ints) != Status.OK:
         quit "couldn't get field:" & field.name
@@ -157,8 +157,9 @@ proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], flo
       else:
           ctx.INFO[field.name] = ints
 
+type exResult = tuple[name:string, sampleList:seq[string]]
 
-proc evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): TableRef[string, seq[string]] =
+iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): exResult =
   ctx.clear()
   var ints = newSeq[int32](3 * variant.n_samples)
   var floats = newSeq[float32](3 * variant.n_samples)
@@ -166,8 +167,6 @@ proc evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): Tab
   ## the most expensive part is pulling out the format fields so we pull all fields
   ## and set values for all samples in the trio list.
   ## once all that is done, we evaluate the expressions.
-  result = newTable[string, seq[string]]()
-
   ctx.set_infos(variant, ints, floats)
   ctx.set_variant_fields(variant)
 
@@ -182,20 +181,36 @@ proc evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): Tab
       trio.fill("alts", alts, 1)
   ctx.set_calculated_variant_fields(alts)
 
-  for trio in ctx.trios:
-    trio[0].duk.alias("kid")
-    trio[1].duk.alias("dad")
-    trio[2].duk.alias("mom")
-    for i, dukex in ctx.expressions:
+  for i, dukex in ctx.expressions:
+    var matching_samples = newSeq[string]()
+    for trio in ctx.trios:
+      trio[0].duk.alias("kid")
+      trio[1].duk.alias("dad")
+      trio[2].duk.alias("mom")
       if dukex.check:
-        result.mgetOrPut(ctx.names[i], newSeq[string]()).add(samples[trio[0].i])
+        matching_samples.add(samples[trio[0].i])
+    if len(matching_samples) > 0:
+      # set INFO of this result so subsequent expressions can use it.
+      ctx.INFO[ctx.names[i]] = join(matching_samples, ",")
+      yield (ctx.names[i], matching_samples)
+
+
+proc getExpressionTable(ovcf:VCF, expressions:seq[string], invcf:string): TableRef[string, string] =
+  result = newTable[string, string]()
+  for e in expressions:
+    var t = e.split(seps={':'}, maxsplit=1)
+    if t.len != 2:
+      quit "must specify name:expression pairs"
+    result[t[0]] = t[1]
+    if ovcf.header.add_info(t[0], ".", "String", &"added by variexpr with expression: '{t[1]}' from {invcf}") != Status.OK:
+      quit "error adding field to header"
 
 
 proc main*(dropfirst:bool=false) =
   let doc = """
 variexpr -- variant expression for great good
 
-Usage: variexpr [--pass-only --out-vcf <path> --vcf <path> --ped <path> --expression=<expression>...]
+Usage: variexpr [options --pass-only --out-vcf <path> --vcf <path> --ped <path> --trio=<expression>...]
 
 Arguments:
 
@@ -209,9 +224,10 @@ Arguments:
 
     "rare_transmitted:(kid.alts > 0) && (dad.alts > 0 || mom.alts > 0) && kid.DP > 10 && mom.DP > 0 && INFO.AF < 0.01"
 
-Options
+Options:
 
   -v --vcf <path>       VCF/BCF
+  -j --js <path>           path to javascript functions to expose to user
   -p --ped <path>       pedigree file with trio relations
   -o --out-vcf <path>   VCF/BCF
   --pass-only           only output variants that pass at least one of the filters [default: false]
@@ -238,7 +254,7 @@ Options
     ivcf:VCF
     ovcf:VCF
 
-  if not open(ivcf, $args["--vcf"], threads=3):
+  if not open(ivcf, $args["--vcf"], threads=1):
     quit "couldn't open:" & $args["--vcf"]
 
   var pass_only = bool(args["--pass-only"])
@@ -258,18 +274,17 @@ Options
 
   ovcf.copy_header(ivcf.header)
 
-  var tbl = initTable[string, string]()
-  for e in @(args["--expression"]):
-    var t = e.split(seps={':'}, maxsplit=1)
-    if t.len != 2:
-      quit "must specify name:expression pairs"
-    tbl[t[0]] = t[1]
-    if ovcf.header.add_info(t[0], ".", "String", &"added by variexpr with expression: '{t[1]}' from {$args[\"--vcf\"]}") != Status.OK:
-      quit "error adding field to header"
-
+  var tbl = ovcf.getExpressionTable(@(args["--trio"]), $args["--vcf"])
   doAssert ovcf.write_header
 
   var ev = newEvaluator(kids, tbl)
+  if $args["--js"] != "nil":
+    var js = $readFile($args["--js"])
+    discard ev.ctx.duk_push_string(js)
+    if ev.ctx.duk_peval() != 0:
+      var err = ev.ctx.duk_safe_to_string(-1)
+      quit "error evaluating code in:" & $args["--js"] & ":" & $err
+    ev.ctx.pop()
   var t = cpuTime()
   var n = 10000
   var vcf_samples: seq[string] = ivcf.samples
@@ -283,14 +298,14 @@ Options
       var persec = n.float64 / secs.float64
       stderr.write_line &"[variexpr] {i} {variant.CHROM}:{variant.start} evaluated {n} variants in {secs:.1f} seconds ({persec:.1f}/second)"
       t = cpuTime()
-    var dns = ev.evaluate(variant, vcf_samples)
-    if pass_only and dns.len == 0: continue
-    for name, samples in dns:
-      var ssamples = join(samples, ",")
-      if variant.info.set(name, ssamples) != Status.OK:
-        quit "error setting field:" & name
+    for ns in ev.evaluate(variant, vcf_samples):
+      if pass_only and ns.sampleList.len == 0: continue
+      var ssamples = join(ns.sampleList, ",")
+      if variant.info.set(ns.name, ssamples) != Status.OK:
+        quit "error setting field:" & ns.name
 
     doAssert ovcf.write_variant(variant)
+  stderr.write_line &"[variexpr] Finished. evaluated {i} total variants."
 
   ovcf.close()
   ivcf.close()
