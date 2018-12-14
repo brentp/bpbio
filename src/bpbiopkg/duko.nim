@@ -73,19 +73,17 @@ proc check*(d:Dukexpr): bool {.inline.} =
   ## evaluate a (previously compiled) boolean expression in the current context
   discard d.ctx.duk_push_heapptr(d.vptr)
   if d.ctx.duk_pcall(0) != 0:
-    var err = d.ctx.duk_safe_to_string(-1)
-    stderr.write_line "[duko] error evaluating: " & d.expr
-    raise newException(ValueError, "error from duktape: " & $err & "\n")
-  result = d.ctx.duk_get_boolean(-1)
+    var err = $d.ctx.duk_safe_to_string(-1)
+    raise newException(ValueError, "error from duktape: " & $err & " for expression:" & d.expr & "\n")
+  else:
+    result = d.ctx.duk_get_boolean(-1)
   d.ctx.pop()
 
 proc check*(ctx: DTContext, expression: string): bool {.inline.} =
     ## evaluate the expression in the current context
     if ctx.duk_peval_string(expression):
-      var err = ctx.duk_safe_to_string(-1)
-      stderr.write_line "[duko] error evaluating: " & expression
-      raise newException(ValueError, "error from duktape: " & $err & "\n")
-
+      var err = $ctx.duk_safe_to_string(-1)
+      raise newException(ValueError, err)
     result = ctx.duk_get_boolean(-1)
     ctx.pop()
 
@@ -266,6 +264,7 @@ when isMainModule:
           kid["sdf"] = 22.2
           kid["xxx"] = 33.3 + i.float
           kid["yy"] = 33.4 + i.float
+
 
           if ctx.check("kid.dp < 500 && dad > 21 && mom == kid.dp"):
             success.inc
