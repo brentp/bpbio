@@ -177,7 +177,7 @@ proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], flo
 
 type exResult = tuple[name:string, sampleList:seq[string]]
 
-iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): exResult =
+iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string], nerrors:var int): exResult =
   ctx.clear()
   var ints = newSeq[int32](3 * variant.n_samples)
   var floats = newSeq[float32](3 * variant.n_samples)
@@ -205,6 +205,7 @@ iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]):
   for trio in ctx.trios:
       trio.fill("alts", alts, 1)
   ctx.set_calculated_variant_fields(alts)
+  var err = ""
 
   for i, dukex in ctx.expressions:
     var matching_samples = newSeq[string]()
@@ -212,13 +213,24 @@ iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]):
       trio[0].duk.alias("kid")
       trio[1].duk.alias("dad")
       trio[2].duk.alias("mom")
-      if dukex.check:
-        matching_samples.add(samples[trio[0].ped_sample.i])
+      try:
+          if dukex.check():
+            matching_samples.add(samples[trio[0].ped_sample.i])
+      except:
+        nerrors += 1
+        if nerrors <= 10:
+          stderr.write_line "[variexpr] javascript error. this can some times happen when a field is missing."
+          stderr.write_line  getCurrentExceptionMsg()
+          stderr.write "[variexpr] occured with variant:", variant.tostring()
+          stderr.write_line "[variexpr] continuing execution."
+        if nerrors == 10:
+          stderr.write_line "[variexpr] not reporting further errors."
+        nerrors += 1
+        err = ""
     if len(matching_samples) > 0:
       # set INFO of this result so subsequent expressions can use it.
       ctx.INFO[ctx.names[i]] = join(matching_samples, ",")
       yield (ctx.names[i], matching_samples)
-
 
 proc getExpressionTable(ovcf:VCF, expressions:seq[string], invcf:string): TableRef[string, string] =
   result = newTable[string, string]()
@@ -231,6 +243,7 @@ proc getExpressionTable(ovcf:VCF, expressions:seq[string], invcf:string): TableR
       quit "error adding field to header"
 
 iterator variants(vcf:VCF, region:string): Variant =
+  ## iterator over region or just the variants.
   if region == "" or region == "nil":
     for v in vcf: yield v
   else:
@@ -286,7 +299,7 @@ Options:
     ivcf:VCF
     ovcf:VCF
 
-  if not open(ivcf, $args["--vcf"], threads=2):
+  if not open(ivcf, $args["--vcf"], threads=1):
     quit "couldn't open:" & $args["--vcf"]
 
   var pass_only = bool(args["--pass-only"])
@@ -322,6 +335,7 @@ Options:
   var vcf_samples: seq[string] = ivcf.samples
 
   var i = 0
+  var nerrors = 0
   for variant in ivcf.variants($args["--region"]):
     variant.vcf = ovcf
     i += 1
@@ -335,12 +349,15 @@ Options:
       if i >= 500000:
         n = 500000
     var any_pass = false
-    for ns in ev.evaluate(variant, vcf_samples):
+    for ns in ev.evaluate(variant, vcf_samples, nerrors):
       if pass_only and ns.sampleList.len == 0: continue
       any_pass = true
       var ssamples = join(ns.sampleList, ",")
       if variant.info.set(ns.name, ssamples) != Status.OK:
         quit "error setting field:" & ns.name
+
+    if nerrors / i > 0.2:
+        quit "too many errors. please check your expression"
 
     if any_pass:
       doAssert ovcf.write_variant(variant)
