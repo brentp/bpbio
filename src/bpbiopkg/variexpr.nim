@@ -63,14 +63,25 @@ proc clear*(ctx:var TrioEvaluator) {.inline.} =
   ctx.INFO.clear()
   # don't need to clear variant as it always has the same stuff.
 
+proc set_ab(ctx: TrioEvaluator, fmt:FORMAT, ints: var seq[int32], floats: var seq[float32]) =
+  if fmt.get("AD", ints) != Status.OK:
+    return
+  floats.setLen(int(ints.len / 2))
+  for i, f in floats.mpairs:
+    var r = ints[2*i]
+    var a = ints[2*i+1]
+    if r < 0 or a < 0: f = -1.0
+    else: f = a.float32 / max(a + r, 1).float32
+  for trio in ctx.trios:
+    for s in trio:
+      s.duk["AB"] = floats[s.ped_sample.i]
+
 proc set_format_field(ctx: TrioEvaluator, f:FormatField, fmt:FORMAT, ints: var seq[int32], floats: var seq[float32]) =
 
   if f.vtype == BCF_TYPE.FLOAT:
     if fmt.get(f.name, floats) != Status.OK:
       quit "couldn't get format field:" & f.name
     for trio in ctx.trios:
-      if f.name == "GQ":
-        echo floats
       trio.fill(f.name, floats, f.n_per_sample)
   elif f.vtype == BCF_TYPE.CHAR:
     discard
@@ -180,9 +191,15 @@ iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]):
 
   # file the format fields
   var fmt = variant.format
+  var has_ad = false
+  var has_ab = false
   for f in fmt.fields:
     if f.name == "GT": continue
+    if f.name == "AD": has_ad = true
+    if f.name == "AB": has_ab = true
     ctx.set_format_field(f, fmt, ints, floats)
+  if has_ad and not has_ab:
+    ctx.set_ab(fmt, ints, floats)
 
   var alts = variant.format.genotypes(ints).alts
   for trio in ctx.trios:
@@ -317,13 +334,16 @@ Options:
         n = 100000
       if i >= 500000:
         n = 500000
+    var any_pass = false
     for ns in ev.evaluate(variant, vcf_samples):
       if pass_only and ns.sampleList.len == 0: continue
+      any_pass = true
       var ssamples = join(ns.sampleList, ",")
       if variant.info.set(ns.name, ssamples) != Status.OK:
         quit "error setting field:" & ns.name
 
-    doAssert ovcf.write_variant(variant)
+    if any_pass:
+      doAssert ovcf.write_variant(variant)
   stderr.write_line &"[variexpr] Finished. evaluated {i} total variants."
 
   ovcf.close()
