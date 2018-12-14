@@ -96,6 +96,13 @@ proc newObject*(ctx:DTContext, name: string): Duko =
   result.vptr = ctx.duk_get_heapptr(-1)
   doAssert result.ctx.duk_put_global_lstring(name, name.len.duk_size_t)
 
+proc `[]=`*(o:Duko, key:string, value: bool) {.inline.} =
+    ## set the property at key to a value
+    var idx = o.ctx.duk_push_heapptr(o.vptr)
+    o.ctx.duk_push_boolean(value.duk_bool_t)
+    doAssert o.ctx.duk_put_prop_lstring(idx, key, key.len.duk_size_t)
+    o.ctx.pop()
+
 proc `[]=`*(o:Duko, key:string, value: SomeFloat) {.inline.} =
     ## set the property at key to a value
     var idx = o.ctx.duk_push_heapptr(o.vptr)
@@ -227,6 +234,18 @@ when isMainModule:
       ctx.duk_eval_string("/HIGH/.test(obj.CSQ)")
       check ctx.duk_get_boolean(-1)
       ctx.duk_destroy_heap()
+
+
+    test "set boolean":
+      var ctx = duk_create_heap(nil, nil, nil, nil, my_fatal)
+      var obj = ctx.newObject("obj")
+      obj["ab"] = true
+      ctx.duk_eval_string("obj.ab ? 'YES' : 'NO'")
+      check ctx.duk_get_string(-1) == "YES"
+      obj["ab"] = false
+      ctx.duk_eval_string("obj.ab ? 'YES' : 'NO'")
+      check ctx.duk_get_string(-1) == "NO"
+
 
     test "speed":
       var ctx = duk_create_heap_default()

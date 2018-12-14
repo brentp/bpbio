@@ -13,7 +13,7 @@ import docopt
 
 
 type ISample = object
-  i: int
+  ped_sample: pedfile.Sample
   duk: Duko
 
 type Trio = array[3, ISample] ## kid, dad, mom
@@ -28,9 +28,9 @@ type TrioEvaluator* = ref object
 
 template fill[T: int8 | int32 | float32 | string](sample:ISample, name:string, values:var seq[T], nper:int) =
   if nper == 1:
-    sample.duk[name] = values[sample.i]
+    sample.duk[name] = values[sample.ped_sample.i]
   elif nper <= 2:
-    sample.duk[name] = values[(nper*sample.i)..<(nper*(sample.i+1))]
+    sample.duk[name] = values[(nper*sample.ped_sample.i)..<(nper*(sample.ped_sample.i+1))]
 
 template fill[T: int8 | int32 | float32 | string](trio:Trio, name:string, values:var seq[T], nper:int) =
   for s in trio:
@@ -49,9 +49,9 @@ proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string]): Tri
     result.expressions.add(result.ctx.compile(v))
     result.names.add(k)
   for kid in kids:
-      result.trios.add([ISample(i:kid.i, duk:result.ctx.newObject(kid.id)),
-                        ISample(i:kid.dad.i, duk:result.ctx.newObject(kid.dad.id)),
-                        ISample(i:kid.mom.i, duk:result.ctx.newObject(kid.mom.id))])
+      result.trios.add([ISample(ped_sample:kid, duk:result.ctx.newObject(kid.id)),
+                        ISample(ped_sample:kid.dad, duk:result.ctx.newObject(kid.dad.id)),
+                        ISample(ped_sample:kid.mom, duk:result.ctx.newObject(kid.mom.id))])
   result.INFO = result.ctx.newObject("INFO")
   result.variant = result.ctx.newObject("variant")
 
@@ -92,6 +92,13 @@ proc set_variant_fields(ctx:TrioEvaluator, variant:Variant) =
   ctx.variant["ALT"] = variant.ALT
   ctx.variant["FILTER"] = variant.FILTER
   ctx.variant["ID"] = $variant.ID
+
+proc set_sample_attributes(ctx:TrioEvaluator) =
+  for trio in ctx.trios:
+      for sample in trio:
+        sample.duk["affected"] = sample.ped_sample.affected
+        var sex = sample.ped_sample.sex
+        sample.duk["sex"] = if sex == 2: "female" elif sex == 1: "male" else: "unknown"
 
 proc sum(counts: array[4, int]): int {.inline.} =
     return counts[0] + counts[1] + counts[2] + counts[3]
@@ -169,6 +176,7 @@ iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]):
   ## once all that is done, we evaluate the expressions.
   ctx.set_infos(variant, ints, floats)
   ctx.set_variant_fields(variant)
+  ctx.set_sample_attributes()
 
   # file the format fields
   var fmt = variant.format
@@ -188,7 +196,7 @@ iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]):
       trio[1].duk.alias("dad")
       trio[2].duk.alias("mom")
       if dukex.check:
-        matching_samples.add(samples[trio[0].i])
+        matching_samples.add(samples[trio[0].ped_sample.i])
     if len(matching_samples) > 0:
       # set INFO of this result so subsequent expressions can use it.
       ctx.INFO[ctx.names[i]] = join(matching_samples, ",")
