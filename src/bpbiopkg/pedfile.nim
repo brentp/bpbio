@@ -25,6 +25,17 @@ proc is_grandkid*(s:Sample): bool {.inline.} =
 proc is_f1*(s:Sample): bool {.inline.} =
   return s.mom != nil and s.dad != nil and s.kids.len > 0
 
+iterator siblings*(s:Sample): Sample =
+  ## report the samples with same mom or dad.
+  ## TODO: look at both mom and dad.
+  ## TODO: handle cases where mom and dad ids
+  var kids = if s.mom != nil: s.mom.kids elif s.dad != nil: s.dad.kids else: newSeq[Sample]()
+  for kid in kids:
+    if kid != s: yield kid
+  if s.mom == nil and s.dad == nil and s.maternal_id != "" and s.paternal_id != "":
+    # TODO: send in seq[Samples] and find samples with same ids
+    discard
+
 proc spouse*(s:Sample): Sample {.inline.} =
   if s.kids.len == 0: return nil
   var k = s.kids[0]
@@ -113,3 +124,10 @@ when isMainModule:
       for i, s in osamples:
         check s.i == i
         check s.id == ovcf.samples[i]
+
+    test "siblings":
+      check samples[0].id == "101976"
+      for sib in samples[0].siblings:
+        check sib.dad == samples[0].dad
+        check sib.mom == samples[0].mom
+
