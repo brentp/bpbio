@@ -2,8 +2,10 @@ import ./duko
 import ./pedfile
 import ./duko
 import strutils
+import math
 import tables
 import hts/vcf
+import unittest
 import os
 import times
 import strformat
@@ -20,6 +22,7 @@ type TrioEvaluator* = ref object
   ctx: DTContext
   trios: seq[Trio]
   INFO: Duko
+  variant: Duko
   expressions: seq[Dukexpr]
   names: seq[string]
 
@@ -51,6 +54,7 @@ proc newEvaluator*(kids: seq[Sample], expression: Table[string, string]): TrioEv
                         ISample(i:kid.dad.i, duk:result.ctx.newObject(kid.dad.id)),
                         ISample(i:kid.mom.i, duk:result.ctx.newObject(kid.mom.id))])
   result.INFO = result.ctx.newObject("INFO")
+  result.variant = result.ctx.newObject("variant")
 
 proc clear*(ctx:var TrioEvaluator) {.inline.} =
   for trio in ctx.trios.mitems:
@@ -58,6 +62,7 @@ proc clear*(ctx:var TrioEvaluator) {.inline.} =
     trio[1].duk.clear()
     trio[2].duk.clear()
   ctx.INFO.clear()
+  # don't need to clear variant as it always has the same stuff.
 
 proc set_format_field(ctx: TrioEvaluator, f:FormatField, fmt:FORMAT, ints: var seq[int32], floats: var seq[float32]) =
 
@@ -75,6 +80,56 @@ proc set_format_field(ctx: TrioEvaluator, f:FormatField, fmt:FORMAT, ints: var s
       trio.fill(f.name, ints, f.n_per_sample)
   else:
     quit "Unknown field type:" & $f.vtype & " in field:" & f.name
+
+proc set_variant_fields(ctx:TrioEvaluator, variant:Variant) =
+  ctx.variant["CHROM"] = $variant.CHROM
+  ctx.variant["start"] = variant.start
+  ctx.variant["stop"] = variant.stop
+  ctx.variant["POS"] = variant.POS
+  ctx.variant["QUAL"] = variant.QUAL
+  ctx.variant["REF"] = variant.REF
+  ctx.variant["ALT"] = variant.ALT
+  ctx.variant["FILTER"] = variant.FILTER
+  ctx.variant["ID"] = $variant.ID
+
+proc sum(counts: array[4, int]): int {.inline.} =
+    return counts[0] + counts[1] + counts[2] + counts[3]
+
+template aaf*(counts:array[4, int]): float64 =
+  ## alternate allele frequency
+  float64(2 * counts[2] + counts[1]) / float64(2 * counts.sum - 2 * counts[3])
+
+proc hwe_score*(counts: array[4, int], aaf:float64): float64 {.inline.} =
+  ## calculate the hardy-weinberg chi-sq deviation from expected. values > 6 are unlikely.
+  ## counts is [num_hom_ref, hum_het, hum_hom_alt, num_unknown]
+  var
+    n_called = float64(counts[0] + counts[1] + counts[2])
+    raf = 1 - aaf
+    exp_hom_ref = (raf ^ 2) * n_called
+    exp_het = (2.0 * (raf * aaf)) * n_called
+    exp_hom_alt = (aaf ^ 2) * n_called
+
+  result = ((counts[0].float64 - exp_hom_ref) ^ 2) / max(1, exp_hom_ref)
+  result += ((counts[1].float64 - exp_het) ^ 2) / max(1, exp_het)
+  result += ((counts[2].float64 - exp_hom_alt) ^ 2) / max(1, exp_hom_alt)
+
+proc set_calculated_variant_fields(ctx:TrioEvaluator, alts: var seq[int8]) =
+  # homref, het, homalt, unknown (-1)
+  var counts = [0, 0, 0, 0]
+  for a in alts:
+    if unlikely(a == -1):
+      counts[3].inc
+    else:
+      counts[a].inc
+
+  var aaf = counts.aaf
+  ctx.variant["aaf"] = aaf
+  ctx.variant["hwe_score"] = hwe_score(counts, aaf)
+  ctx.variant["call_rate"] = 1 - (counts[3].float64 / alts.len.float64)
+  ctx.variant["num_hom_ref"] = counts[0]
+  ctx.variant["num_het"] = counts[1]
+  ctx.variant["num_hom_alt"] = counts[2]
+  ctx.variant["num_unknown"] = counts[3]
 
 proc set_infos(ctx:var TrioEvaluator, variant:Variant, ints: var seq[int32], floats: var seq[float32]) =
   var istr: string = ""
@@ -114,6 +169,7 @@ proc evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): Tab
   result = newTable[string, seq[string]]()
 
   ctx.set_infos(variant, ints, floats)
+  ctx.set_variant_fields(variant)
 
   # file the format fields
   var fmt = variant.format
@@ -124,6 +180,7 @@ proc evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string]): Tab
   var alts = variant.format.genotypes(ints).alts
   for trio in ctx.trios:
       trio.fill("alts", alts, 1)
+  ctx.set_calculated_variant_fields(alts)
 
   for trio in ctx.trios:
     trio[0].duk.alias("kid")
@@ -240,3 +297,4 @@ Options
 
 when isMainModule:
   main()
+
