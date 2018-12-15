@@ -94,6 +94,13 @@ proc newObject*(ctx:DTContext, name: string): Duko =
   result.vptr = ctx.duk_get_heapptr(-1)
   doAssert result.ctx.duk_put_global_lstring(name, name.len.duk_size_t)
 
+proc alias*(o: Duko, copyname:string): Duko {.inline, discardable.} =
+  ## create an alias of a Duko so it can be reference as another name in the javascript.
+  doAssert o.ctx.duk_push_heapptr(o.vptr) >= 0
+  result = Duko(ctx: o.ctx, name:copyname)
+  result.vptr = o.vptr
+  doAssert result.ctx.duk_put_global_literal_raw(copyname, copyname.len.duk_size_t)
+
 proc newObject*(d:Duko, name: string): Duko =
   var idx = d.ctx.duk_push_heapptr(d.vptr)
   result = Duko(ctx: d.ctx, name: name)
@@ -102,6 +109,14 @@ proc newObject*(d:Duko, name: string): Duko =
   #discard result.ctx.duk_push_heapptr(result.vptr)
   doAssert result.ctx.duk_put_prop_lstring(idx, name, name.len.duk_size_t)
   d.ctx.duk_pop
+
+proc alias*(dfrom: Duko, dto:Duko, copyname:string="") {.inline.} =
+  ## create an alias of a Duko to another e.g. kid.alias(mom, "mom")
+  var name = if copyname.len == 0: dto.name else: copyname
+  var idx = dfrom.ctx.duk_push_heapptr(dfrom.vptr)
+  doAssert dfrom.ctx.duk_push_heapptr(dto.vptr) >= 0
+  doAssert dfrom.ctx.duk_put_prop_lstring(idx, name, name.len.duk_size_t)
+  dfrom.ctx.duk_pop
 
 proc `[]=`*(o:Duko, key:string, value: bool) {.inline.} =
     ## set the property at key to a value
@@ -132,13 +147,6 @@ proc `[]=`*(o:Duko, key:string, value: string) {.inline.} =
     if not o.ctx.duk_put_prop_lstring(idx, key, key.len.duk_size_t):
       quit "problem setting:" & key & " -> " & $value
     o.ctx.pop()
-
-proc alias*(o: Duko, copyname:string): Duko {.inline, discardable.} =
-  ## create an alias of a Duko so it can be reference as another name in the javascript.
-  doAssert o.ctx.duk_push_heapptr(o.vptr) >= 0
-  result = Duko(ctx: o.ctx, name:copyname)
-  result.vptr = o.vptr
-  doAssert result.ctx.duk_put_global_literal_raw(copyname, copyname.len.duk_size_t)
 
 proc clear*(o: var Duko) {.inline.} =
   # TODO make this more efficient
@@ -254,6 +262,17 @@ when isMainModule:
       inner["xx"] = 22.3
       ctx.duk_eval_string("outer.inner.xx")
       check ctx.duk_get_number(-1) == 22.3
+
+      ctx.duk_destroy_heap()
+
+    test "alias to object":
+      var ctx = duk_create_heap(nil, nil, nil, nil, my_fatal)
+      var kid = ctx.newObject("kid")
+      var mom = ctx.newObject("mom")
+      mom["age"] = 42.1
+      kid.alias(mom, "mom")
+      ctx.duk_eval_string("kid.mom.age")
+      check ctx.duk_get_number(-1) == 42.1
 
       ctx.duk_destroy_heap()
 
