@@ -29,6 +29,7 @@ bpbio variexpr \
    --ped $ped \
    --load functions.js \ 
    --out-vcf annotated.bcf \
+   --info "variant.call_rate > 0.9" \ # this filter is applied before the trio filters and can speed evaluation if it is stringent.
    --trio "denovo:kid.alts == 1 && mom.alts == 0 && dad.alts == 0 \
                    && kid.AB > 0.25 && kid.AB < 0.75 \
                    && (mom.AD[1] + dad.AD[1]) == 0 \
@@ -36,6 +37,10 @@ bpbio variexpr \
                    && kid.DP >= 12 && mom.DP >= 12 && dad.DP >= 12" \
    --trio "informative:kid.GQ > 20 && dad.GQ > 20 && mom.GQ > 20 && kid.alts == 1 && ((mom.alts == 1 && dad.alts == 0) || (mom.alts == 0 && dad.alts == 1))" \
    --trio "recessive:recessive_func(kid, mom, dad)"
+
+
+Note that `variexpr` does not give direct access to the genotypes, instead exposing `alts` where 0 is homozygous reference, 1 is heterozygous, 2 is
+homozygous alternate and -1 when the genotype is unknown. It is recommended to **decompose** a VCF before sending to `variexpr`
 
 ### Attributes
 

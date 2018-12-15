@@ -21,9 +21,11 @@ type Trio = array[3, ISample] ## kid, dad, mom
 type TrioEvaluator* = ref object
   ctx: DTContext
   trios: seq[Trio]
+  samples: Duko
   INFO: Duko
   variant: Duko
-  expressions: seq[Dukexpr]
+  trio_expressions: seq[Dukexpr]
+  info_expression: Dukexpr
   names: seq[string]
 
 template fill[T: int8 | int32 | float32 | string](sample:ISample, name:string, values:var seq[T], nper:int) =
@@ -36,7 +38,7 @@ template fill[T: int8 | int32 | float32 | string](trio:Trio, name:string, values
   for s in trio:
     s.fill(name, values, nper)
 
-proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string]): TrioEvaluator =
+proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string], info_expr: string): TrioEvaluator =
   ## make a new evaluation context for the given string
   var my_fatal: duk_fatal_function = (proc (udata: pointer, msg:cstring) {.stdcall.} =
     stderr.write_line "variexpr fatal error:"
@@ -46,12 +48,18 @@ proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string]): Tri
   result = TrioEvaluator(ctx:duk_create_heap(nil, nil, nil, nil, my_fatal))
   result.ctx.duk_require_stack_top(500000)
   for k, v in expression:
-    result.expressions.add(result.ctx.compile(v))
+    result.trio_expressions.add(result.ctx.compile(v))
     result.names.add(k)
+
+  result.samples = result.ctx.newObject("samples")
+
+  if info_expr != "" and info_expr != "nil":
+    result.info_expression = result.ctx.compile(info_expr)
+
   for kid in kids:
-      result.trios.add([ISample(ped_sample:kid, duk:result.ctx.newObject(kid.id)),
-                        ISample(ped_sample:kid.dad, duk:result.ctx.newObject(kid.dad.id)),
-                        ISample(ped_sample:kid.mom, duk:result.ctx.newObject(kid.mom.id))])
+      result.trios.add([ISample(ped_sample:kid, duk:result.ctx.newObject("samples." & kid.id)),
+                        ISample(ped_sample:kid.dad, duk:result.ctx.newObject("samples." & kid.dad.id)),
+                        ISample(ped_sample:kid.mom, duk:result.ctx.newObject("samples." & kid.mom.id))])
   result.INFO = result.ctx.newObject("INFO")
   result.variant = result.ctx.newObject("variant")
 
@@ -187,50 +195,52 @@ iterator evaluate*(ctx:var TrioEvaluator, variant:Variant, samples:seq[string], 
   ## once all that is done, we evaluate the expressions.
   ctx.set_infos(variant, ints, floats)
   ctx.set_variant_fields(variant)
-  ctx.set_sample_attributes()
-
-  # file the format fields
-  var fmt = variant.format
-  var has_ad = false
-  var has_ab = false
-  for f in fmt.fields:
-    if f.name == "GT": continue
-    if f.name == "AD": has_ad = true
-    if f.name == "AB": has_ab = true
-    ctx.set_format_field(f, fmt, ints, floats)
-  if has_ad and not has_ab:
-    ctx.set_ab(fmt, ints, floats)
-
   var alts = variant.format.genotypes(ints).alts
-  for trio in ctx.trios:
-      trio.fill("alts", alts, 1)
   ctx.set_calculated_variant_fields(alts)
-  var err = ""
 
-  for i, dukex in ctx.expressions:
-    var matching_samples = newSeq[string]()
+  if ctx.info_expression.ctx == nil or ctx.info_expression.check:
+
+    ctx.set_sample_attributes()
+    # file the format fields
+    var fmt = variant.format
+    var has_ad = false
+    var has_ab = false
+    for f in fmt.fields:
+      if f.name == "GT": continue
+      if f.name == "AD": has_ad = true
+      if f.name == "AB": has_ab = true
+      ctx.set_format_field(f, fmt, ints, floats)
+    if has_ad and not has_ab:
+      ctx.set_ab(fmt, ints, floats)
+
     for trio in ctx.trios:
-      trio[0].duk.alias("kid")
-      trio[1].duk.alias("dad")
-      trio[2].duk.alias("mom")
-      try:
-          if dukex.check():
-            matching_samples.add(samples[trio[0].ped_sample.i])
-      except:
-        nerrors += 1
-        if nerrors <= 10:
-          stderr.write_line "[variexpr] javascript error. this can some times happen when a field is missing."
-          stderr.write_line  getCurrentExceptionMsg()
-          stderr.write "[variexpr] occured with variant:", variant.tostring()
-          stderr.write_line "[variexpr] continuing execution."
-        if nerrors == 10:
-          stderr.write_line "[variexpr] not reporting further errors."
-        nerrors += 1
-        err = ""
-    if len(matching_samples) > 0:
-      # set INFO of this result so subsequent expressions can use it.
-      ctx.INFO[ctx.names[i]] = join(matching_samples, ",")
-      yield (ctx.names[i], matching_samples)
+        trio.fill("alts", alts, 1)
+    var err = ""
+
+    for i, dukex in ctx.trio_expressions:
+      var matching_samples = newSeq[string]()
+      for trio in ctx.trios:
+        trio[0].duk.alias("kid")
+        trio[1].duk.alias("dad")
+        trio[2].duk.alias("mom")
+        try:
+            if dukex.check():
+              matching_samples.add(samples[trio[0].ped_sample.i])
+        except:
+          nerrors += 1
+          if nerrors <= 10:
+            stderr.write_line "[variexpr] javascript error. this can some times happen when a field is missing."
+            stderr.write_line  getCurrentExceptionMsg()
+            stderr.write "[variexpr] occured with variant:", variant.tostring()
+            stderr.write_line "[variexpr] continuing execution."
+          if nerrors == 10:
+            stderr.write_line "[variexpr] not reporting further errors."
+          nerrors += 1
+          err = ""
+      if len(matching_samples) > 0:
+        # set INFO of this result so subsequent expressions can use it.
+        ctx.INFO[ctx.names[i]] = join(matching_samples, ",")
+        yield (ctx.names[i], matching_samples)
 
 proc getExpressionTable(ovcf:VCF, expressions:seq[string], invcf:string): TableRef[string, string] =
   result = newTable[string, string]()
@@ -254,9 +264,9 @@ proc main*(dropfirst:bool=false) =
   let doc = """
 variexpr -- variant expression for great good
 
-Usage: variexpr [options --pass-only --out-vcf <path> --vcf <path> --ped <path> --trio=<expression>...]
+Usage: variexpr [options --pass-only --out-vcf <path> --vcf <path> --ped <path> --trio=<expression>... --info=<expression>]
 
-Arguments:
+About:
 
     <expressions>...  as many name:expression pairs as required. an example would be:
     "denovo:kid.alts == 1 && mom.alts == 0 && dad.alts == 0 && (mom.AD[1] + dad.AD[1]) < 2 && kid.GQ > 10 \
@@ -268,6 +278,10 @@ Arguments:
 
     "rare_transmitted:(kid.alts > 0) && (dad.alts > 0 || mom.alts > 0) && kid.DP > 10 && mom.DP > 0 && INFO.AF < 0.01"
 
+    if a --info expression is specified, it is excuted first with access only to the variant and INFO objects. the boolean
+    returned from this expression indicates whether the other expressions (in --trio) should be excecuted. This is an optimization
+    to allow variexpr to avoid loading all the sample data unless necessary.
+
 Options:
 
   -v --vcf <path>       VCF/BCF
@@ -276,6 +290,9 @@ Options:
   -p --ped <path>       pedigree file with trio relations
   -o --out-vcf <path>   VCF/BCF
   --pass-only           only output variants that pass at least one of the filters [default: false]
+  --trio <string>...    each trio expressions is applied to each trio where "mom", "dad", "kid" labels are available
+  --info <string>       apply a filter using only variables from  the info field and variant attributes. If this filter
+                        does not pass, the trio filters will not be applied.
 
   """
 
@@ -322,7 +339,7 @@ Options:
   var tbl = ovcf.getExpressionTable(@(args["--trio"]), $args["--vcf"])
   doAssert ovcf.write_header
 
-  var ev = newEvaluator(kids, tbl)
+  var ev = newEvaluator(kids, tbl, $args["--info"])
   if $args["--js"] != "nil":
     var js = $readFile($args["--js"])
     discard ev.ctx.duk_push_string(js)
@@ -356,7 +373,7 @@ Options:
       if variant.info.set(ns.name, ssamples) != Status.OK:
         quit "error setting field:" & ns.name
 
-    if nerrors / i > 0.2:
+    if nerrors / i > 0.2 and i > 1000:
         quit "too many errors. please check your expression"
 
     if any_pass:
