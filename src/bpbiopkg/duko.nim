@@ -94,6 +94,15 @@ proc newObject*(ctx:DTContext, name: string): Duko =
   result.vptr = ctx.duk_get_heapptr(-1)
   doAssert result.ctx.duk_put_global_lstring(name, name.len.duk_size_t)
 
+proc newObject*(d:Duko, name: string): Duko =
+  var idx = d.ctx.duk_push_heapptr(d.vptr)
+  result = Duko(ctx: d.ctx, name: name)
+  discard d.ctx.duk_push_object()
+  result.vptr = d.ctx.duk_get_heapptr(-1)
+  #discard result.ctx.duk_push_heapptr(result.vptr)
+  doAssert result.ctx.duk_put_prop_lstring(idx, name, name.len.duk_size_t)
+  d.ctx.duk_pop
+
 proc `[]=`*(o:Duko, key:string, value: bool) {.inline.} =
     ## set the property at key to a value
     var idx = o.ctx.duk_push_heapptr(o.vptr)
@@ -162,6 +171,7 @@ proc `[]`*(o: Duko, key:string): float {.inline.} =
     doAssert o.ctx.duk_get_prop(idx)
     result = o.ctx.duk_get_number(-1).float
     o.ctx.duk_pop_n(2)
+
 
 when isMainModule:
   import unittest
@@ -233,6 +243,19 @@ when isMainModule:
       check ctx.duk_get_boolean(-1)
       ctx.duk_destroy_heap()
 
+    test "object in object":
+      var ctx = duk_create_heap(nil, nil, nil, nil, my_fatal)
+      var outer = ctx.newObject("outer")
+      var inner = outer.newObject("inner")
+      inner["asdf"] = "hello"
+      ctx.duk_eval_string("outer.inner.asdf")
+      check ctx.duk_get_string(-1) == "hello"
+
+      inner["xx"] = 22.3
+      ctx.duk_eval_string("outer.inner.xx")
+      check ctx.duk_get_number(-1) == 22.3
+
+      ctx.duk_destroy_heap()
 
     test "set boolean":
       var ctx = duk_create_heap(nil, nil, nil, nil, my_fatal)
@@ -243,6 +266,7 @@ when isMainModule:
       obj["ab"] = false
       ctx.duk_eval_string("obj.ab ? 'YES' : 'NO'")
       check ctx.duk_get_string(-1) == "NO"
+      ctx.duk_destroy_heap()
 
 
     test "speed":
@@ -324,7 +348,7 @@ when isMainModule:
       ctx.duk_destroy_heap();
 
     proc addo(obj: Duko) =
-        for i in 0..200:
+        for i in 0..20:
           obj["attr" & $i] = i.float
           obj["attrs" & $i] = @[i.float, i.float*2]
 

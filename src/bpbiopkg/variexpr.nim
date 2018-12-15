@@ -38,6 +38,18 @@ template fill[T: int8 | int32 | float32 | string](trio:Trio, name:string, values
   for s in trio:
     s.fill(name, values, nper)
 
+
+var debug: DTCFunction = (proc (ctx: DTContext): cint {.stdcall.} =
+  var nargs = ctx.duk_get_top()
+  if nargs == 1:
+    stderr.write_line $ctx.duk_safe_to_string(-1)
+    return
+  discard ctx.duk_push_string(", ")
+  ctx.duk_insert(0)
+  ctx.duk_join(nargs)
+  stderr.write_line $ctx.duk_require_string(-1)
+)
+
 proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string], info_expr: string): TrioEvaluator =
   ## make a new evaluation context for the given string
   var my_fatal: duk_fatal_function = (proc (udata: pointer, msg:cstring) {.stdcall.} =
@@ -45,8 +57,11 @@ proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string], info
     quit $msg
   )
 
+
   result = TrioEvaluator(ctx:duk_create_heap(nil, nil, nil, nil, my_fatal))
   result.ctx.duk_require_stack_top(500000)
+  var idx = result.ctx.duk_push_c_function(debug, -1.cint)
+  discard result.ctx.duk_put_global_string("debug")
   for k, v in expression:
     result.trio_expressions.add(result.ctx.compile(v))
     result.names.add(k)
@@ -57,9 +72,9 @@ proc newEvaluator*(kids: seq[Sample], expression: TableRef[string, string], info
     result.info_expression = result.ctx.compile(info_expr)
 
   for kid in kids:
-      result.trios.add([ISample(ped_sample:kid, duk:result.ctx.newObject("samples." & kid.id)),
-                        ISample(ped_sample:kid.dad, duk:result.ctx.newObject("samples." & kid.dad.id)),
-                        ISample(ped_sample:kid.mom, duk:result.ctx.newObject("samples." & kid.mom.id))])
+      result.trios.add([ISample(ped_sample:kid, duk:result.samples.newObject(kid.id)),
+                        ISample(ped_sample:kid.dad, duk:result.samples.newObject(kid.dad.id)),
+                        ISample(ped_sample:kid.mom, duk:result.samples.newObject(kid.mom.id))])
   result.INFO = result.ctx.newObject("INFO")
   result.variant = result.ctx.newObject("variant")
 
