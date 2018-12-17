@@ -48,8 +48,15 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
   var look = newTable[string,Sample]()
 
   for line in lines(path):
-    if line[0] == '#': continue
+    if line.len > 0 and line[0] == '#': continue
+    if line.strip().len == 0: continue
+    echo line
     var toks = line.strip().split('\t')
+    echo toks.len
+    if toks.len < 6:
+      stderr.write_line "[pedfile] error: expected at least 5 tab-delimited columns in ped file: " & path
+      stderr.write_line "[pedfile] error: line was:" & $toks
+
 
     var s = Sample(family_id: toks[0], id: toks[1], kids:new_seq[Sample](), paternal_id: toks[2], maternal_id:toks[3], i: -1)
     s.affected = toks[5] == "2"
