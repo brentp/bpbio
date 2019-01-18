@@ -1,5 +1,11 @@
 import strutils
+import math
+import binaryheap
+import sequtils
 import strformat
+import deques
+import hashes
+import sets
 import tables
 import hts/vcf
 
@@ -19,12 +25,6 @@ type
 proc `$`*(s:Sample): string =
   return format(&"Sample(id:{s.id}, i:{s.i})")
 
-proc is_grandkid*(s:Sample): bool {.inline.} =
-  return s.mom != nil and s.mom.dad != nil and s.dad != nil and s.mom.mom != nil and s.dad.dad != nil and s.dad.mom != nil
-
-proc is_f1*(s:Sample): bool {.inline.} =
-  return s.mom != nil and s.dad != nil and s.kids.len > 0
-
 iterator siblings*(s:Sample): Sample =
   ## report the samples with same mom or dad.
   ## TODO: look at both mom and dad.
@@ -42,6 +42,176 @@ proc spouse*(s:Sample): Sample {.inline.} =
   if k.dad == s: return k.mom
   return k.dad
 
+proc addAncestors(q: var Deque[Sample], o:Sample) =
+  if o.mom != nil:
+    q.addLast(o.mom)
+  if o.dad != nil:
+    q.addLast(o.dad)
+  if o.mom != nil:
+    q.addAncestors(o.mom)
+  if o.dad != nil:
+    q.addAncestors(o.dad)
+
+proc successors(o:Sample, samples: var seq[Sample]) =
+  ## add kids and kids of kids
+  for kid in o.kids:
+    samples.add(kid)
+  for kid in o.kids:
+    successors(kid, samples)
+
+proc successors(o:Sample): seq[Sample] =
+  successors(o, result)
+
+proc ancestors(o:Sample, samples:var seq[Sample]) =
+  if o.mom != nil:
+    samples.add(o.mom)
+  if o.dad != nil:
+    samples.add(o.dad)
+  if o.mom != nil:
+    ancestors(o.mom, samples)
+  if o.dad != nil:
+    ancestors(o.dad, samples)
+
+proc ancestors(o:Sample): seq[Sample] =
+  ancestors(o, result)
+
+proc hash*(s:Sample): Hash =
+  var h: Hash = 0
+
+  h = h !& hash(s.family_id)
+  h = h !& hash(s.id)
+  result = !$h
+
+proc lowest_common_ancestors(samples:seq[Sample], a:Sample, b:Sample): seq[Sample] =
+  var all_ancestors = initSet[Sample](8)
+  var common_ancestors = initSet[Sample](2)
+  for i, target in @[a, b]:
+    var parents = initSet[Sample](8)
+    var q = initDeque[Sample]()
+
+    q.addFirst(target)
+    while q.len > 0:
+      var n = q.popFirst
+      if parents.contains(n): continue
+      # A predecessor of n is a node m such that there exists a directed edge from m to n.
+      # A successor of n is a node m such that there exists a directed edge from n to m.
+      #
+      # TODO: might need to flip addKids and ancestors.
+      q.addAncestors(n)
+      parents.incl(n)
+
+    if i == 0:
+      common_ancestors.incl(parents)
+    else:
+      common_ancestors = common_ancestors.intersection(parents)
+    all_ancestors.incl(parents)
+
+
+  for p in common_ancestors:
+    for child in p.successors:
+      if not common_ancestors.contains(child) and child in all_ancestors:
+        result.add(p)
+        break
+
+type dsample = object
+  s: Sample
+  dist: int
+  i: int
+
+
+proc dijkstra(samples:seq[Sample], a:Sample, b:Sample): int =
+  ## return the shortest path from a to b. in this case a must be
+  ## an predecessor (older than) b.
+  ## see: https://github.com/mburst/dijkstras-algorithm/blob/master/dijkstras.py
+  var dsamples = newSeq[dsample](samples.len)
+  var previous = initTable[Sample, Sample](4)
+
+  var h = newHeap[dsample]() do (a, b: dsample) -> int:
+    return a.dist - b.dist
+
+  for i, v in samples:
+    if v == a: dsamples[i] = dsample(s:v, dist:0, i:i)
+    else: dsamples[i] = dsample(s:v, dist:samples.len + 2, i:i)
+    h.push(dsamples[i])
+
+  while h.size > 0:
+    var dsmallest = h.pop()
+    var smallest = dsmallest.s
+    if smallest == b:
+      if not previous.contains(smallest): return -1
+      while previous.contains(smallest):
+        result += 1
+        smallest = previous[smallest]
+      return
+
+    if dsmallest.dist == samples.len + 2: break
+
+    for okid in dsmallest.s.kids:
+      # TODO: make this more efficient.
+      var kid = dsamples[samples.find(okid)]
+      var alt = dsmallest.dist + 1
+      if alt < kid.dist:
+        # TODO: make sure kid with updated dist gets into the heap
+        kid.dist = alt
+        previous[okid] = dsmallest.s
+
+        var heapSamples = toSeq(h.items)
+
+        h = newHeap[dsample](proc(a, b: dsample):  int =
+          return a.dist - b.dist
+        )
+        for s in heapSamples:
+          if s.s.id == okid.id:
+            h.push(kid)
+          else:
+            h.push(s)
+  return -1
+
+
+proc relatedness*(a:Sample, b:Sample, samples: seq[Sample]): float64 =
+  ## coefficient of relatedness of 2 samples given their family.
+  ## to differentiates siblings from parent-child relationships,
+  ## siblings are return with a value of 0.49
+  ## samples from different families are given a value of -1.
+  if a.family_id != b.family_id: return -1
+  #[
+  if a.dad == b or a.mom == b: return 0.5
+  if b.dad == a or b.mom == a: return 0.5
+  if a.dad == nil and a.mom == nil and b.dad == nil and b.mom == nil: return 0
+
+  if a.dad != nil and a.dad == b.dad:
+    result += 0.25
+    if a.mom != nil and a.mom == b.mom:
+      result += 0.25
+    return
+  if a.mom != nil and a.mom == b.mom:
+    return 0.25
+  ]#
+
+  var lca = lowest_common_ancestors(samples, b, a)
+  if lca.len == 0: return 0
+  var
+    amax: int = 1000 # hacky use of 1000 and empty value.
+    bmax: int = 1000
+    n = 0
+  for anc in lca:
+    if anc != a:
+      amax = min(amax, dijkstra(samples, anc, a))
+    if anc != b:
+      bmax = min(bmax, dijkstra(samples, anc, b))
+
+  # if one of the samples is in the set, then their distance is 1.
+  if a in lca:
+    amax = 1
+  if b in lca:
+    bmax = 1
+
+  if amax != 1000: n += 1 else: amax = 0
+  if bmax != 1000: n += 1 else: bmax = 0
+
+  # subtract 2 because the path includes the end sample which we don't need.
+  return n.float64 * pow(2'f64, -float64(amax + bmax))
+
 proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
   result = new_seq_of_cap[Sample](10)
 
@@ -50,9 +220,7 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
   for line in lines(path):
     if line.len > 0 and line[0] == '#': continue
     if line.strip().len == 0: continue
-    echo line
     var toks = line.strip().split('\t')
-    echo toks.len
     if toks.len < 6:
       stderr.write_line "[pedfile] error: expected at least 5 tab-delimited columns in ped file: " & path
       stderr.write_line "[pedfile] error: line was:" & $toks
@@ -137,4 +305,53 @@ when isMainModule:
       for sib in samples[0].siblings:
         check sib.dad == samples[0].dad
         check sib.mom == samples[0].mom
+
+
+    test "lowest common ancestor":
+      var k1 = Sample(family_id:"1", id:"kid1")
+      var k2 = Sample(family_id:"1", id:"kid2")
+      var mom = Sample(family_id:"1", id:"mom")
+      var dad = Sample(family_id:"1", id:"dad")
+      k1.mom = mom
+      k2.mom = mom
+      k1.dad = dad
+      k2.dad = dad
+      mom.kids.add(@[k1, k2])
+      dad.kids.add(@[k1, k2])
+
+      echo lowest_common_ancestors(@[k1, k2, mom, dad], k1, k2)
+
+    test "dijkstra":
+      var k1 = Sample(family_id:"1", id:"kid1")
+      var k2 = Sample(family_id:"1", id:"kid2")
+      var mom = Sample(family_id:"1", id:"mom")
+      var dad = Sample(family_id:"1", id:"dad")
+      var uncle = Sample(family_id: "1", id:"uncle")
+      var gma = Sample(family_id:"1", id:"gma")
+      var ggma = Sample(family_id:"1", id:"ggma")
+      k1.mom = mom
+      k2.mom = mom
+      k1.dad = dad
+      k2.dad = dad
+      dad.mom = gma
+      uncle.mom = gma
+      gma.kids.add(@[dad, uncle])
+      mom.kids.add(@[k1, k2])
+      dad.kids.add(@[k1, k2])
+      ggma.kids.add(gma)
+      gma.mom = ggma
+      var fam = @[k1, k2, mom, dad, gma, ggma, uncle]
+      check 2 == dijkstra(fam, gma, k1)
+      check 1 == dijkstra(fam, mom, k1)
+      check 3 == dijkstra(fam, ggma, k1)
+      check 1 == dijkstra(fam, ggma, gma)
+      check 2 == dijkstra(fam, ggma, dad)
+      check -1 == dijkstra(fam, ggma, mom)
+
+      check relatedness(uncle, k1, fam) == 0.25
+      check relatedness(dad, k1, fam) == 0.5
+      check relatedness(k1, k2, fam) == 0.5
+      check relatedness(k2, mom, fam) == 0.5
+      check relatedness(k2, gma, fam) == 0.25
+      check relatedness(k2, ggma, fam) == 0.125
 
