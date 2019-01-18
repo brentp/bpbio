@@ -181,6 +181,10 @@ proc relatedness*(a:Sample, b:Sample, samples: seq[Sample]): float64 =
   if a.dad == b or a.mom == b: return 0.5
   if b.dad == a or b.mom == a: return 0.5
 
+  # sibs get a special-case of 0.49 to differentiate from parent-child
+  if a.dad != nil and a.dad == b.dad and a.mom != nil and a.mom == b.mom:
+    return 0.49
+
   if a notin samples: return -1'f64
   if b notin samples: return -1'f64
 
@@ -357,7 +361,7 @@ when isMainModule:
 
       check relatedness(uncle, k1, fam) == 0.25
       check relatedness(dad, k1, fam) == 0.5
-      check relatedness(k1, k2, fam) == 0.5
+      check relatedness(k1, k2, fam) == 0.49 # ^^^^^
       check relatedness(k2, mom, fam) == 0.5
       check relatedness(k2, gma, fam) == 0.25
       check relatedness(k2, ggma, fam) == 0.125
