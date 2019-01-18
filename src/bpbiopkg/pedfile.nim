@@ -187,6 +187,8 @@ proc relatedness*(a:Sample, b:Sample, samples: seq[Sample]): float64 =
   if a.mom != nil and a.mom == b.mom:
     return 0.25
   ]#
+  if a notin samples: return -1'f64
+  if b notin samples: return -1'f64
 
   var lca = lowest_common_ancestors(samples, b, a)
   if lca.len == 0: return 0
@@ -321,26 +323,31 @@ when isMainModule:
 
       echo lowest_common_ancestors(@[k1, k2, mom, dad], k1, k2)
 
-    test "dijkstra":
+    test "dijkstra and relatedness":
       var k1 = Sample(family_id:"1", id:"kid1")
       var k2 = Sample(family_id:"1", id:"kid2")
       var mom = Sample(family_id:"1", id:"mom")
       var dad = Sample(family_id:"1", id:"dad")
       var uncle = Sample(family_id: "1", id:"uncle")
+      var cousin = Sample(family_id: "1", id:"cousin")
       var gma = Sample(family_id:"1", id:"gma")
       var ggma = Sample(family_id:"1", id:"ggma")
+      var unrel = Sample(family_id:"1", id:"un")
+      var extern = Sample(family_id:"xxx", id:"extern")
       k1.mom = mom
       k2.mom = mom
       k1.dad = dad
       k2.dad = dad
       dad.mom = gma
       uncle.mom = gma
+      uncle.kids.add(cousin)
+      cousin.dad = uncle
       gma.kids.add(@[dad, uncle])
       mom.kids.add(@[k1, k2])
       dad.kids.add(@[k1, k2])
       ggma.kids.add(gma)
       gma.mom = ggma
-      var fam = @[k1, k2, mom, dad, gma, ggma, uncle]
+      var fam = @[k1, k2, mom, dad, gma, ggma, cousin, uncle, unrel]
       check 2 == dijkstra(fam, gma, k1)
       check 1 == dijkstra(fam, mom, k1)
       check 3 == dijkstra(fam, ggma, k1)
@@ -354,4 +361,22 @@ when isMainModule:
       check relatedness(k2, mom, fam) == 0.5
       check relatedness(k2, gma, fam) == 0.25
       check relatedness(k2, ggma, fam) == 0.125
+      check relatedness(extern, gma, fam) == -1'f64
+      check relatedness(unrel, gma, fam) == 0.0'f64
+      check relatedness(k1, cousin, fam) == 0.125
 
+    test "relatedness":
+      var k1 = Sample(family_id:"1", id:"kid1")
+      var dad = Sample(family_id:"1", id:"kid1")
+      k1.dad = dad
+      dad.kids.add(k1)
+      var fam = @[k1, dad]
+
+      check 0.5 == relatedness(k1, dad, fam)
+
+    test "relatedness with no relations":
+      var a = Sample(family_id:"1", id:"a")
+      var b = Sample(family_id:"2", id:"b")
+      check relatedness(a, b, @[a, b]) == -1'f64
+      b.family_id = "1"
+      check relatedness(a, b, @[a, b]) == -0'f64
