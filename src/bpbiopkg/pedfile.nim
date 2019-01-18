@@ -116,23 +116,23 @@ proc lowest_common_ancestors(samples:seq[Sample], a:Sample, b:Sample): seq[Sampl
 type dsample = object
   s: Sample
   dist: int
-  i: int
-
 
 proc dijkstra(samples:seq[Sample], a:Sample, b:Sample): int =
   ## return the shortest path from a to b. in this case a must be
   ## an predecessor (older than) b.
   ## see: https://github.com/mburst/dijkstras-algorithm/blob/master/dijkstras.py
-  var dsamples = newSeq[dsample](samples.len)
+  var dsamples = newSeqOfCap[dsample](4)
   var previous = initTable[Sample, Sample](4)
+  if a.family_id != b.family_id: return -1
 
   var h = newHeap[dsample]() do (a, b: dsample) -> int:
     return a.dist - b.dist
 
-  for i, v in samples:
-    if v == a: dsamples[i] = dsample(s:v, dist:0, i:i)
-    else: dsamples[i] = dsample(s:v, dist:samples.len + 2, i:i)
-    h.push(dsamples[i])
+  for v in samples:
+    if v.family_id != a.family_id: continue
+    if v == a: dsamples.add(dsample(s:v, dist:0))
+    else: dsamples.add(dsample(s:v, dist:samples.len + 2))
+    h.push(dsamples[dsamples.high])
 
   while h.size > 0:
     var dsmallest = h.pop()
@@ -148,7 +148,11 @@ proc dijkstra(samples:seq[Sample], a:Sample, b:Sample): int =
 
     for okid in dsmallest.s.kids:
       # TODO: make this more efficient.
-      var kid = dsamples[samples.find(okid)]
+      var kid:dsample
+      for s in dsamples:
+        if s.s == okid:
+          kid = s
+          break
       var alt = dsmallest.dist + 1
       if alt < kid.dist:
         # TODO: make sure kid with updated dist gets into the heap
@@ -174,19 +178,9 @@ proc relatedness*(a:Sample, b:Sample, samples: seq[Sample]): float64 =
   ## siblings are return with a value of 0.49
   ## samples from different families are given a value of -1.
   if a.family_id != b.family_id: return -1
-  #[
   if a.dad == b or a.mom == b: return 0.5
   if b.dad == a or b.mom == a: return 0.5
-  if a.dad == nil and a.mom == nil and b.dad == nil and b.mom == nil: return 0
 
-  if a.dad != nil and a.dad == b.dad:
-    result += 0.25
-    if a.mom != nil and a.mom == b.mom:
-      result += 0.25
-    return
-  if a.mom != nil and a.mom == b.mom:
-    return 0.25
-  ]#
   if a notin samples: return -1'f64
   if b notin samples: return -1'f64
 
@@ -196,11 +190,16 @@ proc relatedness*(a:Sample, b:Sample, samples: seq[Sample]): float64 =
     amax: int = 1000 # hacky use of 1000 and empty value.
     bmax: int = 1000
     n = 0
+
   for anc in lca:
     if anc != a:
-      amax = min(amax, dijkstra(samples, anc, a))
+      var d = dijkstra(samples, anc, a)
+      if d > 0:
+        amax = min(amax, d)
     if anc != b:
-      bmax = min(bmax, dijkstra(samples, anc, b))
+      var d = dijkstra(samples, anc, b)
+      if d > 0:
+        bmax = min(bmax, dijkstra(samples, anc, b))
 
   # if one of the samples is in the set, then their distance is 1.
   if a in lca:
@@ -281,6 +280,7 @@ proc match*(samples: seq[Sample], vcf:var VCF, verbose:bool=true): seq[Sample] =
 when isMainModule:
   import algorithm
   import unittest
+  import times
 
   var samples = parse_ped("tests/testa.ped")
   var ovcf:VCF
@@ -380,3 +380,20 @@ when isMainModule:
       check relatedness(a, b, @[a, b]) == -1'f64
       b.family_id = "1"
       check relatedness(a, b, @[a, b]) == -0'f64
+
+
+    test "relatedness with 603 ceph samples":
+      var samples = parse_ped("tests/ceph.ped")
+      var t = cpuTime()
+      var n = 0
+
+      for i, sampleA in samples[0..<samples.high]:
+        for j, sampleB in samples[i + 1..samples.high]:
+          var rel = relatedness(sampleA, sampleB, samples)
+          doAssert -1'f64 <= rel
+          if rel > 0.5:
+            echo &"{sampleA} {sampleB} {rel}"
+          n += 1
+          if n mod 50000 == 0: echo "tested:", n
+
+      echo &"time for {n} calculations: {cpuTime() - t:.1f}"
