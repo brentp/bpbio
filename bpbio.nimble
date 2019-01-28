@@ -9,4 +9,4 @@ bin           = @["bpbio"]
 
 # Dependencies
 
-requires "nim >= 0.19.0", "plotly", "hts", "docopt", "genoiser >= 0.2.3"
+requires "nim >= 0.19.0", "plotly", "hts", "docopt", "genoiser >= 0.2.3", "binaryheap"
