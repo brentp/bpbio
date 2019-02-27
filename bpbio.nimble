@@ -1,5 +1,5 @@
 # Package
-version       = "0.1.1"
+version       = "0.1.2"
 author        = "Brent Pedersen"
 description   = "collection of command-line tools and small utility functions for genomics"
 license       = "MIT"
