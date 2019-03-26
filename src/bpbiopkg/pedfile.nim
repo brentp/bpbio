@@ -232,8 +232,11 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
 
 
     var s = Sample(family_id: toks[0], id: toks[1], kids:new_seq[Sample](), paternal_id: toks[2], maternal_id:toks[3], i: -1)
-    s.affected = toks[5] == "2"
-    s.sex = if toks[4] == ".": -9 else: parseInt(toks[4])
+    s.affected = toks[5].toLowerAscii in  ["2", "affected"]
+    if toks[4].toLowerAscii in ["XXXXXX", "unknown", "male", "female"]:
+      s.sex = @["XXXXXX", "unknown", "male", "female"].find(toks[4].toLowerAscii) - 1
+    else:
+      s.sex = if toks[4] == ".": -9 else: parseInt(toks[4])
     result.add(s)
     look[s.id] = s
 
