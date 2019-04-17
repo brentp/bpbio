@@ -2,6 +2,7 @@ import strutils
 import math
 import binaryheap
 import sequtils
+import algorithm
 import strformat
 import deques
 import hashes
@@ -23,7 +24,7 @@ type
     i*:int
 
 proc `$`*(s:Sample): string =
-  return format(&"Sample(id:{s.id}, i:{s.i})")
+  return format(&"Sample(id:{s.id}, i:{s.i}, affected:{$s.affected})")
 
 iterator siblings*(s:Sample): Sample =
   ## report the samples with same mom or dad.
@@ -260,23 +261,31 @@ proc match*(samples: seq[Sample], vcf:var VCF, verbose:bool=true): seq[Sample] =
   # get samples in same order as VCF
   result = new_seqOfCap[Sample](len(si))
   var samplesById = newTable[string,Sample]()
+  var missing = newSeq[string]()
   for sample in samples:
     sample.i = -1
     if not (sample.id in si):
       if verbose:
-        stderr.write_line(&"[pedfile] {sample.id} not found in VCF samples")
+        missing.add(sample.id)
       continue
-
     sample.i = si[sample.id]
     samplesById[sample.id] = sample
 
+  if missing.len > 0:
+    sort(missing, system.cmp)
+    stderr.write_line(&"[pedfile] ped samples: {join(missing, \",\")} not found in VCF samples")
+
   var sampleList = newSeq[string]()
+  missing.setLen(0)
   for s in vcf.samples:
     if not (s in samplesById):
       if verbose:
-        stderr.write_line(&"[pedfile] {s} from VCF not found in samples")
+        missing.add(s)
       continue
     sampleList.add(s)
+  if missing.len > 0:
+    sort(missing, system.cmp)
+    stderr.write_line(&"[pedfile] VCF samples: {join(missing, \",\")} not found in pedigree file")
 
   vcf.set_samples(sampleList)
   for i, s in vcf.samples:
@@ -399,7 +408,7 @@ when isMainModule:
           var rel = relatedness(sampleA, sampleB, samples)
           doAssert -1'f64 <= rel
           if rel > 0.5:
-            echo &"{sampleA} {sampleB} {rel}"
+            echo &"{$sampleA} {$sampleB} {$rel}"
           n += 1
           if n mod 50000 == 0: echo "tested:", n
 
