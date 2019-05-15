@@ -223,10 +223,13 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
 
   var look = newTable[string,Sample]()
 
+  var i = -1
   for line in lines(path):
+    i += 1
     if line.len > 0 and line[0] == '#': continue
     if line.strip().len == 0: continue
     var toks = line.strip().split('\t')
+    var likely_header = i == 0 and toks[0].toLowerAscii in ["family_id", "familyid", "famid", "kindred_id", "kindredid"]
     if toks.len < 6:
       stderr.write_line "[pedfile] error: expected at least 5 tab-delimited columns in ped file: " & path
       stderr.write_line "[pedfile] error: line was:" & $toks
@@ -237,7 +240,14 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
     if toks[4].toLowerAscii in ["XXXXXX", "unknown", "male", "female"]:
       s.sex = @["XXXXXX", "unknown", "male", "female"].find(toks[4].toLowerAscii) - 1
     else:
-      s.sex = if toks[4] == ".": -9 else: parseInt(toks[4])
+      try:
+        s.sex = if toks[4] == ".": -9 else: parseInt(toks[4])
+      except:
+        if likely_header:
+          stderr.write_line "skipping line as apparent header:" & line
+          continue
+        else:
+          raise getCurrentException()
     result.add(s)
     look[s.id] = s
 
@@ -246,12 +256,12 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
       s.dad = look[s.paternal_id]
       s.dad.kids.add(s)
     elif verbose and not (s.paternal_id in @[".", "-9", "", "0"]):
-      stderr.write_line &"[pedfile] paternal_id: \"{s.paternal_id}\" referenced for sample {s.id} not found"
+      stderr.write_line &"[pedfile] paternal_id: \"{s.paternal_id}\" referenced for sample \"{s.id}\" not found"
     if s.maternal_id in look:
       s.mom = look[s.maternal_id]
       s.mom.kids.add(s)
     elif verbose and not (s.maternal_id in @[".", "-9", "", "0"]):
-      stderr.write_line &"[pedfile] maternal_id: \"{s.maternal_id}\" referenced for sample {s.id} not found"
+      stderr.write_line &"[pedfile] maternal_id: \"{s.maternal_id}\" referenced for sample \"{s.id}\" not found"
 
 proc match*(samples: seq[Sample], vcf:var VCF, verbose:bool=true): seq[Sample] =
   ## adjust the VCF samples and the samples to match
@@ -413,3 +423,16 @@ when isMainModule:
           if n mod 50000 == 0: echo "tested:", n
 
       echo &"time for {n} calculations: {cpuTime() - t:.1f}"
+
+  test "ped file with kindred header":
+
+    var fh:File
+    check open(fh, "__k.ped", fmWrite)
+ 
+    fh.write_line("Kindred_Id\tSample_ID\tPaternal_ID\tMaternal_ID\tSex\tPhenotype")
+    fh.write_line("Kindred_Id\ta\tdad\tmom\t1\t1")
+
+    fh.close()
+
+    var samples = parse_ped("__k.ped")
+    check samples.len == 1
