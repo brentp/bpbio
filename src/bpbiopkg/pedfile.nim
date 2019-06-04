@@ -229,7 +229,7 @@ proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
     if line.len > 0 and line[0] == '#': continue
     if line.strip().len == 0: continue
     var toks = line.strip().split('\t')
-    var likely_header = i == 0 and toks[0].toLowerAscii in ["family_id", "familyid", "famid", "kindred_id", "kindredid"]
+    var likely_header = i == 0 and toks[0].toLowerAscii in ["family_id", "familyid", "famid", "kindred_id", "kindredid", "family id", "kindred id"]
     if toks.len < 6:
       stderr.write_line "[pedfile] error: expected at least 5 tab-delimited columns in ped file: " & path
       stderr.write_line "[pedfile] error: line was:" & $toks
