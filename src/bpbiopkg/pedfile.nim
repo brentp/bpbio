@@ -43,39 +43,6 @@ proc spouse*(s:Sample): Sample {.inline.} =
   if k.dad == s: return k.mom
   return k.dad
 
-proc addAncestors(q: var Deque[Sample], o:Sample) =
-  if o.mom != nil:
-    q.addLast(o.mom)
-  if o.dad != nil:
-    q.addLast(o.dad)
-  if o.mom != nil:
-    q.addAncestors(o.mom)
-  if o.dad != nil:
-    q.addAncestors(o.dad)
-
-proc successors(o:Sample, samples: var seq[Sample]) =
-  ## add kids and kids of kids
-  for kid in o.kids:
-    samples.add(kid)
-  for kid in o.kids:
-    successors(kid, samples)
-
-proc successors(o:Sample): seq[Sample] =
-  successors(o, result)
-
-proc ancestors(o:Sample, samples:var seq[Sample]) =
-  if o.mom != nil:
-    samples.add(o.mom)
-  if o.dad != nil:
-    samples.add(o.dad)
-  if o.mom != nil:
-    ancestors(o.mom, samples)
-  if o.dad != nil:
-    ancestors(o.dad, samples)
-
-proc ancestors(o:Sample): seq[Sample] =
-  ancestors(o, result)
-
 proc hash*(s:Sample): Hash =
   var h: Hash = 0
 
@@ -83,140 +50,96 @@ proc hash*(s:Sample): Hash =
   h = h !& hash(s.id)
   result = !$h
 
-proc lowest_common_ancestors(samples:seq[Sample], a:Sample, b:Sample): seq[Sample] =
-  var all_ancestors = initSet[Sample](8)
-  var common_ancestors = initSet[Sample](2)
-  for i, target in @[a, b]:
-    var parents = initSet[Sample](8)
-    var q = initDeque[Sample]()
 
-    q.addFirst(target)
-    while q.len > 0:
-      var n = q.popFirst
-      if parents.contains(n): continue
-      # A predecessor of n is a node m such that there exists a directed edge from m to n.
-      # A successor of n is a node m such that there exists a directed edge from n to m.
-      #
-      # TODO: might need to flip addKids and ancestors.
-      q.addAncestors(n)
-      parents.incl(n)
+type sample_path = tuple[sample:Sample, a_path:seq[Sample], b_path:seq[Sample]]
 
-    if i == 0:
-      common_ancestors.incl(parents)
-    else:
-      common_ancestors = common_ancestors.intersection(parents)
-    all_ancestors.incl(parents)
+proc LCA(a:Sample, b:Sample, lcas: var HashSet[sample_path], a_path:seq[Sample], b_path:seq[Sample]) =
 
+  var a_path = a_path
+  var b_path = b_path
 
-  for p in common_ancestors:
-    for child in p.successors:
-      if not common_ancestors.contains(child) and child in all_ancestors:
-        result.add(p)
-        break
+  if a == nil: return
+  if b == nil: return
 
-type dsample = object
-  s: Sample
-  dist: int
+  if a == b:
+    lcas.incl((a, a_path, b_path))
 
-proc dijkstra(samples:seq[Sample], a:Sample, b:Sample): int =
-  ## return the shortest path from a to b. in this case a must be
-  ## an predecessor (older than) b.
-  ## see: https://github.com/mburst/dijkstras-algorithm/blob/master/dijkstras.py
-  var dsamples = newSeqOfCap[dsample](4)
-  var previous = initTable[Sample, Sample](4)
-  if a.family_id != b.family_id: return -1
+  block:
+    var a_path = a_path & a.mom
+    LCA(a.mom, b, lcas, a_path, b_path)
+  block:
+    var a_path = a_path & a.dad
+    LCA(a.dad, b, lcas, a_path, b_path)
+  block:
+    var b_path = b_path & b.mom
+    LCA(a, b.mom, lcas, a_path, b_path)
+  block:
+    var b_path = b_path & b.dad
+    LCA(a, b.dad, lcas, a_path, b_path)
 
-  var h = newHeap[dsample]() do (a, b: dsample) -> int:
-    return a.dist - b.dist
+proc double_use(a:seq[Sample], b:seq[Sample]): bool {.inline.} =
+  # a is a chain of samples up to common ancestor
+  # b is chain of samples up to common ancestor
+  # if a and b have the same tails, then we have double-use
+  # and we don't count this chain
+  # http://genetic-genealogy.co.uk/Toc115570135.html
+  var ai = a.high
+  var bi = b.high
+  doAssert a[ai] == b[bi]
+  ai -= 1
+  bi -= 1
+  if ai < 0 or bi < 0: return false
 
-  for v in samples:
-    if v.family_id != a.family_id: continue
-    if v == a: dsamples.add(dsample(s:v, dist:0))
-    else: dsamples.add(dsample(s:v, dist:samples.len + 2))
-    h.push(dsamples[dsamples.high])
+  # a:@[Sample(id:8451, i:-1, affected:false), Sample(id:8448, i:-1, affected:false)]
+  # b:@[Sample(id:8683, i:-1, affected:false), Sample(id:8451, i:-1, affected:false), Sample(id:8448, i:-1, affected:false)]
 
-  while h.size > 0:
-    var dsmallest = h.pop()
-    var smallest = dsmallest.s
-    if smallest == b:
-      if not previous.contains(smallest): return -1
-      while previous.contains(smallest):
-        result += 1
-        smallest = previous[smallest]
-      return
+  # go backwards through the chains
+  result = false
+  while ai > 0 or bi > 0:
+    #echo "testing:", ai, ",", bi
+    if a[ai] != b[bi]:
+      #echo "bailing. ai:", ai, " bi:", bi
+      return false
+    return true
+    #result = true
+    #ai -= 1
+    #bi -= 1
+    #if ai <= 0 or bi <= 0: break
 
-    if dsmallest.dist == samples.len + 2: break
+  when defined(superdebug):
+    echo "ai:", ai, " bi:", bi, "dup?", result
 
-    for okid in dsmallest.s.kids:
-      # TODO: make this more efficient.
-      var kid:dsample
-      for s in dsamples:
-        if s.s == okid:
-          kid = s
-          break
-      var alt = dsmallest.dist + 1
-      if alt < kid.dist:
-        # TODO: make sure kid with updated dist gets into the heap
-        kid.dist = alt
-        previous[okid] = dsmallest.s
+proc is_full_sib_with(a:Sample, b:Sample): bool {.inline.} =
+  return a.dad != nil and b.dad != nil and a.dad == b.dad and a.mom != nil and b.mom != nil and a.mom == b.mom
 
-        var heapSamples = toSeq(h.items)
+proc relatedness*(a:Sample, b:Sample): float =
+  if a.family_id != b.family_id: return -1.0
+  var r = initHashSet[sample_path](8)
+  LCA(a, b, r, @[a], @[b])
+  if len(r) == 0: return 0.0
 
-        h = newHeap[dsample](proc(a, b: dsample):  int =
-          return a.dist - b.dist
-        )
-        for s in heapSamples:
-          if s.s.id == okid.id:
-            h.push(kid)
-          else:
-            h.push(s)
-  return -1
+  # now get a seq and sort by shortest totlal path-length
+  var rs = newSeq[sample_path]()
+  for x in r:
+    when defined(superdebug):
+      echo ">>>>>>>>>>>>>>>>>>>>>>> "
+      echo "a:", x.a_path
+      echo "b:", x.b_path
+    if double_use(x.a_path, x.b_path):
+      when defined(superdebug):
+        echo "double"
+        echo "<<<<<<<<<<<<<<<<<<<<"
+      continue
+    rs.add(x)
+    when defined(superdebug):
+      echo "not double"
+      echo "<<<<<<<<<<<<<<<<<<<<"
+    #echo " "
+  for r in rs:
+    result += pow(2'f64, -float64(r.a_path.len - 1 + r.b_path.len - 1))#*pow(1 + prel, 0.5)
 
-
-proc relatedness*(a:Sample, b:Sample, samples: seq[Sample]): float64 =
-  ## coefficient of relatedness of 2 samples given their family.
-  ## to differentiates siblings from parent-child relationships,
-  ## siblings are return with a value of 0.49
-  ## samples from different families are given a value of -1.
-  if a.family_id != b.family_id: return -1
-  if a.dad == b or a.mom == b: return 0.5
-  if b.dad == a or b.mom == a: return 0.5
-
-  # sibs get a special-case of 0.49 to differentiate from parent-child
-  if a.dad != nil and a.dad == b.dad and a.mom != nil and a.mom == b.mom:
-    return 0.49
-
-  if a notin samples: return -1'f64
-  if b notin samples: return -1'f64
-
-  var lca = lowest_common_ancestors(samples, b, a)
-  if lca.len == 0: return 0
-  var
-    amax: int = 1000 # hacky use of 1000 and empty value.
-    bmax: int = 1000
-    n = 0
-
-  for anc in lca:
-    if anc != a:
-      var d = dijkstra(samples, anc, a)
-      if d > 0:
-        amax = min(amax, d)
-    if anc != b:
-      var d = dijkstra(samples, anc, b)
-      if d > 0:
-        bmax = min(bmax, dijkstra(samples, anc, b))
-
-  # if one of the samples is in the set, then their distance is 1.
-  if a in lca:
-    amax = 1
-  if b in lca:
-    bmax = 1
-
-  if amax != 1000: n += 1 else: amax = 0
-  if bmax != 1000: n += 1 else: bmax = 0
-
-  # subtract 2 because the path includes the end sample which we don't need.
-  return n.float64 * pow(2'f64, -float64(amax + bmax))
+  if result == 0.5 and a.is_full_sib_with(b):
+    result = 0.49
 
 proc parse_ped*(path: string, verbose:bool=true): seq[Sample] =
   result = new_seq_of_cap[Sample](10)
@@ -315,6 +238,7 @@ when isMainModule:
 
   suite "pedfile test suite":
 
+    #[
     test "that samples match those in vcf":
       var osamples = samples.match(ovcf)
       for i, s in osamples:
@@ -334,20 +258,7 @@ when isMainModule:
         check sib.dad == samples[0].dad
         check sib.mom == samples[0].mom
 
-
-    test "lowest common ancestor":
-      var k1 = Sample(family_id:"1", id:"kid1")
-      var k2 = Sample(family_id:"1", id:"kid2")
-      var mom = Sample(family_id:"1", id:"mom")
-      var dad = Sample(family_id:"1", id:"dad")
-      k1.mom = mom
-      k2.mom = mom
-      k1.dad = dad
-      k2.dad = dad
-      mom.kids.add(@[k1, k2])
-      dad.kids.add(@[k1, k2])
-
-      echo lowest_common_ancestors(@[k1, k2, mom, dad], k1, k2)
+    ]#
 
     test "dijkstra and relatedness":
       var k1 = Sample(family_id:"1", id:"kid1")
@@ -357,7 +268,9 @@ when isMainModule:
       var uncle = Sample(family_id: "1", id:"uncle")
       var cousin = Sample(family_id: "1", id:"cousin")
       var gma = Sample(family_id:"1", id:"gma")
+      var gpa = Sample(family_id:"1", id:"gma")
       var ggma = Sample(family_id:"1", id:"ggma")
+      var ggpa = Sample(family_id:"1", id:"ggpa")
       var unrel = Sample(family_id:"1", id:"un")
       var extern = Sample(family_id:"xxx", id:"extern")
       k1.mom = mom
@@ -365,7 +278,9 @@ when isMainModule:
       k1.dad = dad
       k2.dad = dad
       dad.mom = gma
+      dad.dad = gpa
       uncle.mom = gma
+      uncle.dad = gpa
       uncle.kids.add(cousin)
       cousin.dad = uncle
       gma.kids.add(@[dad, uncle])
@@ -373,23 +288,17 @@ when isMainModule:
       dad.kids.add(@[k1, k2])
       ggma.kids.add(gma)
       gma.mom = ggma
-      var fam = @[k1, k2, mom, dad, gma, ggma, cousin, uncle, unrel]
-      check 2 == dijkstra(fam, gma, k1)
-      check 1 == dijkstra(fam, mom, k1)
-      check 3 == dijkstra(fam, ggma, k1)
-      check 1 == dijkstra(fam, ggma, gma)
-      check 2 == dijkstra(fam, ggma, dad)
-      check -1 == dijkstra(fam, ggma, mom)
+      gma.dad = ggpa
 
-      check relatedness(uncle, k1, fam) == 0.25
-      check relatedness(dad, k1, fam) == 0.5
-      check relatedness(k1, k2, fam) == 0.49 # ^^^^^
-      check relatedness(k2, mom, fam) == 0.5
-      check relatedness(k2, gma, fam) == 0.25
-      check relatedness(k2, ggma, fam) == 0.125
-      check relatedness(extern, gma, fam) == -1'f64
-      check relatedness(unrel, gma, fam) == 0.0'f64
-      check relatedness(k1, cousin, fam) == 0.125
+      check relatedness(uncle, k1) == 0.25
+      check relatedness(dad, k1) == 0.5
+      check relatedness(k1, k2) == 0.49 # ^^^^^
+      check relatedness(k2, mom) == 0.5
+      check relatedness(k2, gma) == 0.25
+      check relatedness(k2, ggma) == 0.125
+      check relatedness(extern, gma) == -1'f64
+      check relatedness(unrel, gma) == 0.0'f64
+      check relatedness(k1, cousin) == 0.125
 
     test "relatedness":
       var k1 = Sample(family_id:"1", id:"kid1")
@@ -398,14 +307,15 @@ when isMainModule:
       dad.kids.add(k1)
       var fam = @[k1, dad]
 
-      check 0.5 == relatedness(k1, dad, fam)
+      check 0.5 == relatedness(k1, dad)
 
     test "relatedness with no relations":
+      echo "xxx"
       var a = Sample(family_id:"1", id:"a")
       var b = Sample(family_id:"2", id:"b")
-      check relatedness(a, b, @[a, b]) == -1'f64
+      check relatedness(a, b) == -1'f64
       b.family_id = "1"
-      check relatedness(a, b, @[a, b]) == -0'f64
+      check relatedness(a, b) == -0'f64
 
 
     test "relatedness with 603 ceph samples":
@@ -415,7 +325,7 @@ when isMainModule:
 
       for i, sampleA in samples[0..<samples.high]:
         for j, sampleB in samples[i + 1..samples.high]:
-          var rel = relatedness(sampleA, sampleB, samples)
+          var rel = relatedness(sampleA, sampleB)
           doAssert -1'f64 <= rel
           if rel > 0.5:
             echo &"{$sampleA} {$sampleB} {$rel}"
